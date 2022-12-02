@@ -1,0 +1,194 @@
+<html>
+<head>
+<style>
+body { 
+    margin: 0;   /* Remove body margins */
+}
+/* Fullscreen Button 
+------------------------------*/
+#fullscreen-button {
+    position: absolute;
+    top:  15px;
+    right:  15px;
+    background: rgba(0,0,0,0.05);
+    border:  0;
+    width:  40px;
+    height:  40px;
+    border-radius: 50%;
+    box-sizing: border-box;
+    transition:  transform .3s;
+    font-size: 0;
+    opacity: 1;
+    pointer-events: auto;
+    cursor:  pointer;
+}
+#fullscreen-button:hover {
+    transform: scale(1.125);
+}
+#fullscreen-button span {
+    width:  4px;
+    height:  4px;
+    border-top:  2.5px solid #111; /* color */
+    border-left:  2.5px solid #111; /* color */
+    position: absolute;
+    outline: 1px solid transparent;
+    -webkit-backface-visibility: hidden;
+    transform: translateZ(0);
+    will-change: transform;
+    -webkit-perspective: 1000;
+    transition:  .3s;
+    transition-delay: .75s;
+}
+#fullscreen-button span:nth-child(1) {
+    top: 11px;
+    left: 11px;
+}
+#fullscreen-button span:nth-child(2) {
+    top: 11px;
+    left: 22px;
+    transform: rotate(90deg);
+}
+#fullscreen-button span:nth-child(3) {
+    top: 22px;
+    left: 11px;
+    transform: rotate(-90deg);
+}
+#fullscreen-button span:nth-child(4) {
+    top: 22px;
+    left: 22px;
+    transform: rotate(-180deg);
+}
+
+/* Fullscreen True
+------------------------------*/
+[fullscreen] #fullscreen-button span:nth-child(1) {
+    top: 22px;
+    left: 22px;
+}
+[fullscreen] #fullscreen-button span:nth-child(2) {
+    top: 22px;
+    left: 11px;
+}
+[fullscreen] #fullscreen-button span:nth-child(3) {
+    top: 11px;
+    left: 22px;
+}
+[fullscreen] #fullscreen-button span:nth-child(4) {
+    top: 11px;
+    left: 11px;
+}
+
+/* Dark Style
+------------------------------*/
+[light-mode=dark] {
+    background: #111;
+    color:  #fff;
+}
+[light-mode=dark] #fullscreen-button {
+    background: rgba(255,255,255,.05);
+}
+
+[light-mode=dark] #fullscreen-button span {
+    border-top:  2.5px solid #fff;
+    border-left:  2.5px solid #fff;
+}
+
+.imgbox {
+    display: grid;
+    height: 100%;
+}
+.center-fit {
+    max-width: 100%;
+    max-height: 100vh;
+    margin: auto;
+}
+
+</style>
+<script>
+function create_fullscreen_button() {
+    let fullscreen_button = document.createElement("button");
+    fullscreen_button.setAttribute('id','fullscreen-button');
+    fullscreen_button.addEventListener("click", toggle_fullscreen);
+    fullscreen_button.innerHTML  = `
+        <span></span>
+        <span></span>
+        <span></span>
+        <span></span>
+    `;
+    document.body.appendChild(fullscreen_button);
+}
+
+function toggle_fullscreen() {
+    if (!document.fullscreenElement &&    // alternative standard method
+        !document.mozFullScreenElement && !document.webkitFullscreenElement) {  // current working methods
+        if (image.requestFullscreen) {
+            image.requestFullscreen();
+        } else if (document.documentElement.mozRequestFullScreen) {
+            image.mozRequestFullScreen();
+        } else if (document.documentElement.webkitRequestFullscreen) {
+            image.webkitRequestFullscreen(Element.ALLOW_KEYBOARD_INPUT);
+        }
+        document.body.setAttribute("fullscreen","") 
+    } else {
+        if (document.cancelFullScreen) {
+            document.cancelFullScreen();
+        } else if (document.mozCancelFullScreen) {
+            document.mozCancelFullScreen();
+        } else if (document.webkitCancelFullScreen) {
+            document.webkitCancelFullScreen();
+        }
+        document.body.removeAttribute("fullscreen") 
+    }              
+}
+function check_fullscreen() {
+    // Because users can exit & enter fullscreen differently
+    if (document.fullscreenElement  
+        || document.webkitIsFullScreen 
+        || document.mozFullScreen) { 
+        document.body.setAttribute("fullscreen","") 
+    }
+    else  { 
+        document.body.removeAttribute("fullscreen") 
+    }
+}
+setInterval(function(){ check_fullscreen();}, 1000); 
+
+function onLoad() {
+    let elem = document.getElementById("image");
+
+    const document_element = document.documentElement;
+    if (document.fullscreenEnabled || /* Standard syntax */
+        document.webkitFullscreenEnabled || /* Safari */
+        document.msFullscreenEnabled/* IE11 */) 
+    {
+        create_fullscreen_button();
+    }
+
+    function toggleFullscreen() {
+        let elem = document.getElementById("image");
+
+        if (!document.fullscreenElement) {
+            elem.requestFullscreen().catch((err) => {
+            alert(`Error attempting to enable fullscreen mode: ${err.message} (${err.name})`);
+            });
+        } else {
+            document.exitFullscreen();
+        }
+    }
+
+    elem.addEventListener("dblclick", toggleFullscreen);
+
+    setInterval( function() {
+        const img = document.getElementById("image");
+        //img.src = "image.png" + new Date().getTime();
+        img.src = "image.png?" + new Date().getTime();
+    }, 250)
+}
+</script>
+</head>
+<body onload="onLoad()">
+<div class="imgbox">
+    <img id="image" src="image.png" class="center-fit"/>
+</div>
+</body>
+</html>
