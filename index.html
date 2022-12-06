@@ -1,16 +1,51 @@
 <html>
 <head>
 <style>
+.dragme{
+    position:absolute;
+    cursor: move;
+    /* 
+     * Prevent javascript warning because of returning false from drag handler
+     * (equivalent to calling preventDefault) 
+     */
+    touch-action: none; 
+    z-index: 1;
+    /* border: 1px solid #000; */
+}
+.token {
+    position : absolute;
+    height: auto;
+    z-index: 1;
+}
+.token-label {
+    text-align: center;
+    font-family: Verdana, Geneva, Tahoma, sans-serif;
+    font-size: 4pt;
+    padding:0; margin:0; border:0;
+    background-color: rgba(255, 255, 255, 0.50);
+    /* border: 1px solid #000; */
+}
+.token-image {
+    /* border: 1px solid #000; */
+    text-align: center;
+    padding:0; margin:0; border:0;
+}
+#draggable {
+    background-color: #ccc;
+    border: 1px solid #000;
+}
 body { 
     margin: 0;   /* Remove body margins */
 }
+
 /* Fullscreen Button 
+https://henryegloff.com/fullscreen-button/
 ------------------------------*/
 #fullscreen-button {
     position: absolute;
     top:  15px;
     right:  15px;
-    background: rgba(0,0,0,0.05);
+    background: rgba(128,128,128,25);
     border:  0;
     width:  40px;
     height:  40px;
@@ -93,102 +128,292 @@ body {
     border-left:  2.5px solid #fff;
 }
 
+/* Center and scale image on viewport */
 .imgbox {
     display: grid;
     height: 100%;
+    /* Don't leak map size in non-fullscreen */
+    /* background-color: rgb(196, 196, 196);  */
+    
 }
-.center-fit {
+
+.imgbox::backdrop {
+    /* Clear to fog color to prevent leaking the size in fullscreen */
+    background-color: rgb(255,255,255);
+}
+.ccenter-fit {
     max-width: 100%;
     max-height: 100vh;
     margin: auto;
 }
 
+.center-fit {
+    max-width:100%;
+    max-height:100%;
+    /* Position is necessary so when downscaling it's also centered */
+    position:absolute;
+    /* Position and margin are necessary so it aligns to the center */
+    top:0; left:0; right:0; bottom:0;
+    margin:auto;
+    z-index: 0;
+}
+
 </style>
 <script>
+var divBeingDragged = undefined;
+function startDrag(e) {
+    // https://stackoverflow.com/questions/17992543/how-do-i-drag-an-image-smoothly-around-the-screen-using-pure-javascript
+    // determine event object
+    if (!e) {
+        var e = window.event;
+    }
+
+    // IE uses srcElement, others use target
+    var target = e.target ? e.target : e.srcElement;
+
+    target = target.closest('.dragme');
+    if (!target) {
+        console.log("No dragme class, ignoring");
+        return
+    };
+
+    // calculate event X, Y coordinates
+    offsetX = e.clientX || e.targetTouches[0].pageX; //the same syntax for the x value
+    offsetY = e.clientY || e.targetTouches[0].pageY; //the same syntax for the x value
+    
+    // assign default values for top and left properties
+    if (!target.style.left) { target.style.left='0px'};
+    if (!target.style.top) { target.style.top='0px'};
+
+    // calculate integer values for top and left 
+    // properties
+    coordX = parseInt(target.style.left);
+    coordY = parseInt(target.style.top);
+    target.style.zIndex = 2;
+    divBeingDragged = target;
+
+    // move div element
+    document.onmousemove = dragDiv;
+    window.ontouchmove = dragDiv;
+    
+}
+function dragDiv(e) {
+    if (!divBeingDragged) {
+        return
+    }
+    if (!e) {
+        var e = window.event;
+    }
+    let target = divBeingDragged;
+    // move div element
+    target.style.left = coordX + (e.clientX || e.targetTouches[0].pageX) - offsetX + 'px';
+    target.style.top = coordY + (e.clientY || e.targetTouches[0].pageY) - offsetY + 'px';
+
+    return false;
+}
+function stopDrag() {
+    if (divBeingDragged) {
+        divBeingDragged.style.zIndex = 1;
+        divBeingDragged = undefined;
+    }
+}
+
 function create_fullscreen_button() {
     let fullscreen_button = document.createElement("button");
-    fullscreen_button.setAttribute('id','fullscreen-button');
+    fullscreen_button.setAttribute('id', 'fullscreen-button');
     fullscreen_button.addEventListener("click", toggle_fullscreen);
-    fullscreen_button.innerHTML  = `
-        <span></span>
-        <span></span>
-        <span></span>
-        <span></span>
+
+    fullscreen_button.innerHTML = `
+    <span></span>
+    <span></span>
+    <span></span>
+    <span></span>
     `;
-    document.body.appendChild(fullscreen_button);
+
+    // This needs to be on the fullscreen element since otherwise it will get
+    // occluded by it no matter the z-index
+    document.getElementById("imgbox").appendChild(fullscreen_button);
+
+    setInterval(function(){ check_fullscreen();}, 2000); 
 }
 
 function toggle_fullscreen() {
-    if (!document.fullscreenElement &&    // alternative standard method
-        !document.mozFullScreenElement && !document.webkitFullscreenElement) {  // current working methods
-        if (image.requestFullscreen) {
-            image.requestFullscreen();
-        } else if (document.documentElement.mozRequestFullScreen) {
-            image.mozRequestFullScreen();
-        } else if (document.documentElement.webkitRequestFullscreen) {
-            image.webkitRequestFullscreen(Element.ALLOW_KEYBOARD_INPUT);
+    console.log("windows size", window.outerWidth, window.outerHeight, " devicepixelratio", window.devicePixelRatio);
+    if (!document.fullscreenElement && !document.mozFullScreenElement && !document.webkitFullscreenElement) {
+        let elementToFullscreen = document.getElementById("imgbox");
+        if (elementToFullscreen.requestFullscreen) {
+            elementToFullscreen.requestFullscreen()
+        } else if (elementToFullscreen.mozRequestFullScreen) {
+            elementToFullscreen.mozRequestFullScreen()
+        } else if (elementToFullscreen.webkitRequestFullscreen) {
+            elementToFullscreen.webkitRequestFullscreen(Element.ALLOW_KEYBOARD_INPUT)
         }
-        document.body.setAttribute("fullscreen","") 
+        document.body.setAttribute("fullscreen", 1)
+        
     } else {
         if (document.cancelFullScreen) {
-            document.cancelFullScreen();
+            document.cancelFullScreen()
         } else if (document.mozCancelFullScreen) {
-            document.mozCancelFullScreen();
+            document.mozCancelFullScreen()
         } else if (document.webkitCancelFullScreen) {
-            document.webkitCancelFullScreen();
+            document.webkitCancelFullScreen()
         }
-        document.body.removeAttribute("fullscreen") 
-    }              
+
+        document.body.removeAttribute("fullscreen")
+    }
 }
+
+var ratio = 1.0;
+var tokenWidthInPixels = 40.0;
+var canvasOffsetLeft = 0.0;
+var canvasOffsetTop = 0.0;
+
+function initTokenScaling() {
+    let canvas = document.getElementById("canvas");
+    let drags = document.querySelectorAll(".dragMe");
+    console.log("canvas dims", canvas.offsetLeft, canvas.offsetTop, canvas.width, canvas.height);
+    ratio = canvas.width / canvas.naturalWidth;
+    canvasOffsetLeft = canvas.offsetLeft;
+    canvasOffsetTop = canvas.offsetTop;
+    // Place the tokens in the middle of the canvas to start with
+    for (var i = 0; i < drags.length; ++i) {
+        let image = document.getElementById("image"+i);
+        image.width = (ratio * tokenWidthInPixels);
+        drags[i].style.left = canvasOffsetLeft + canvas.width/2.0 + "px";
+        drags[i].style.top = canvas.offsetTop + canvas.height/2.0 + "px";
+    }
+}
+
+function updateTokenScaling() {
+    /**
+     * Need to support:
+     * - Draggable tokens
+     * - Tokens on top of the canvas both fullscreen and windowed.
+     * - Canvas with the map centered and maximized in both fullscreen and
+     *   windowed. This means that the tokens need to be aware of this resizing
+     *   since then a canvas pixel no longer corresponds to a token pixel and
+     *   there doesn't seem to be an automatic way of making the tokens belong
+     *   to the same resizing. Both token position and size need to be aware of
+     *   this.
+     * - In addition, switching to fullscreen causes a similar resizing of the
+     *   canvas, which the tokens affected by. This only seems to happen on
+     *   fullscreen mobile and it doesn't happen on windowed mobile or
+     *   fullscreen Edge desktop .
+     *
+     *   The following code keeps the token size and position constant across
+     *   resizing and fullscreen.
+     *
+     *   XXX Hook this on togglefullscreen and onResize instead of the timer?
+     *       (but the timer is there initially because fullscreen can be ended
+     *       by non detectable means (but maybe nowadays there's an event to
+     *       hook on?)
+     *   )
+     */
+    let canvas = document.getElementById("canvas");
+    
+    let newRatio = canvas.width / canvas.naturalWidth;
+    let newCanvasOffsetLeft = canvas.offsetLeft;
+    let newCanvasOffsetTop = canvas.offsetTop;
+
+    if (
+            // Sometimes newRatio becomes infinity in one iteration but it's
+            // okay the previous and the next, not clear why (maybe because the
+            // dynamic image is being loaded?) ignore those
+            ((ratio != newRatio) && Number.isFinite(newRatio)) ||
+            // Also needs to udpate the positions when the canvas is recentered
+            // because the window was resized even if the ratio stayed constant
+            ((newCanvasOffsetLeft != canvasOffsetLeft) && Number.isFinite(newCanvasOffsetLeft)) ||
+            ((newCanvasOffsetTop != canvasOffsetTop) && Number.isFinite(newCanvasOffsetTop))
+        ) {
+        console.log("ratio", ratio, "newRatio", newRatio);
+
+        for (let i = 0; i < 2; ++i) {
+            let token = document.getElementById("token"+i);
+            let image = document.getElementById("image"+i);
+            image.width = (newRatio * tokenWidthInPixels);
+            let pixLeft = (parseInt(token.style.left) - canvasOffsetLeft) / ratio;
+            token.style.left = (newCanvasOffsetLeft + pixLeft * newRatio) + "px";
+            let pixTop = (parseInt(token.style.top) - canvasOffsetTop) / ratio;
+            token.style.top = (newCanvasOffsetTop + pixTop * newRatio) + "px";
+        }
+
+        ratio = newRatio;
+        canvasOffsetLeft = canvas.offsetLeft;
+        canvasOffsetTop = canvas.offsetTop;
+    }
+    
+    console.log("canvas", canvas.offsetLeft, canvas.offsetTop);
+}
+
 function check_fullscreen() {
-    // Because users can exit & enter fullscreen differently
-    if (document.fullscreenElement  
-        || document.webkitIsFullScreen 
-        || document.mozFullScreen) { 
-        document.body.setAttribute("fullscreen","") 
+    console.log("check_fullscreen");
+    // Because users can exit & enter fullscreen by other methods
+    if (document.fullscreenElement || document.webkitIsFullScreen || document.mozFullScreen) {
+        if (!document.body.getAttribute("fullscreen")) {
+            console.log("Entering fullscreen after the fact");
+            document.body.setAttribute("fullscreen", 1);
+        }
+    } else {
+        if (document.body.getAttribute("fullscreen")) {
+            console.log("Exiting fullscreen after the fact");
+            document.body.removeAttribute("fullscreen");
+        }
     }
-    else  { 
-        document.body.removeAttribute("fullscreen") 
-    }
+
+    updateTokenScaling();
 }
-setInterval(function(){ check_fullscreen();}, 1000); 
+
+var imageToTokenRatio = undefined;
 
 function onLoad() {
-    let elem = document.getElementById("image");
+    console.log("Installing drag")
+    document.onmousedown = startDrag;
+    document.onmouseup = stopDrag;
+    window.ontouchstart = startDrag;
+    window.ontouchend = stopDrag;
 
-    const document_element = document.documentElement;
-    if (document.fullscreenEnabled || /* Standard syntax */
-        document.webkitFullscreenEnabled || /* Safari */
-        document.msFullscreenEnabled/* IE11 */) 
-    {
-        create_fullscreen_button();
-    }
+    console.log("Positioning drags");
+    initTokenScaling();
+    
+    console.log("Installing fullscreen");
+    let elem = document.getElementById("canvas");
 
-    function toggleFullscreen() {
-        let elem = document.getElementById("image");
+    // Fullscreen button
+    if (document.fullscreenEnabled || document.webkitFullscreenEnabled || 
+	  	document.msFullscreenEnabled ) {
+		create_fullscreen_button();
+	}
 
-        if (!document.fullscreenElement) {
-            elem.requestFullscreen().catch((err) => {
-            alert(`Error attempting to enable fullscreen mode: ${err.message} (${err.name})`);
-            });
-        } else {
-            document.exitFullscreen();
-        }
-    }
+    elem.addEventListener("dblclick", toggle_fullscreen);
 
-    elem.addEventListener("dblclick", toggleFullscreen);
-
+    console.log("Installing reload")
     setInterval( function() {
-        const img = document.getElementById("image");
+        const img = document.getElementById("canvas");
         //img.src = "image.png" + new Date().getTime();
         img.src = "image.png?" + new Date().getTime();
-    }, 250)
+    }, 5000)
 }
 </script>
 </head>
 <body onload="onLoad()">
-<div class="imgbox">
-    <img id="image" src="image.png" class="center-fit"/>
-</div>
+    <div class="imgbox" id ="imgbox">
+        <div class = "token dragme"  id="token0">
+            <table>
+                <tr><td class="token-image">
+                    <img src="https://www.enworld.org/attachments/female_human_wizard_t01-png.121370/" id="image0">
+                </td></tr>
+                <tr><td class="token-label">Wizardia</td></tr>
+            </table>
+        </div>
+        <div class = "token dragme"  id="token1">
+            <table>
+                <tr><td class="token-image">
+                    <img src="https://www.enworld.org/attachments/male_human_warrior_t02-png.121372/" id="image1"> 
+                </td></tr>
+                <tr><td class="token-label">Warrardio</td></tr>
+            </table>
+        </div>
+        <img src="image.png" id="canvas" class="center-fit" />
+    </div>
 </body>
 </html>
