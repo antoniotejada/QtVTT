@@ -14,6 +14,10 @@ Virtual Table Top written in Python and Qt
 
 ![image](https://user-images.githubusercontent.com/6446344/205719486-b1cd811e-61eb-4985-a11e-a7fa2fbbe253.png)
 
+### Documentation browser with TOC, term filter and search, circular walls
+
+![image](https://user-images.githubusercontent.com/6446344/206880662-6bb845c3-a5ce-48a9-81bd-bdf7380bb8b1.png)
+
 ## Video
 
 
@@ -27,7 +31,8 @@ https://user-images.githubusercontent.com/6446344/205395528-095dee66-6fb8-4a85-9
 
 ## Features
 
-- Written in Python and using PyQt, some html for the HTTP serving player's view.
+- Written in Python and using PyQt, some HTML and SVG for the HTTP serving
+  player's view.
 
 ### Main app
 - Import [Dungeon Scrawl v1](https://probabletrain.itch.io/dungeon-scrawl) and [v2](https://app.dungeonscrawl.com/) maps with walls and doors
@@ -45,6 +50,13 @@ https://user-images.githubusercontent.com/6446344/205395528-095dee66-6fb8-4a85-9
 - Creating, loading and saving scenes (editing walls and doors not yet
   supported)
 - Creating circular walls
+- Import images, tokens
+- Deleting tokens
+- Editing token labels
+- DM fulll and view screenshots
+- HTML documentation browser with quick filter, table of contents and search
+  result navigation inside and across documents
+- Grid drawing
 
 
 ### HTTP server
@@ -52,6 +64,7 @@ https://user-images.githubusercontent.com/6446344/205395528-095dee66-6fb8-4a85-9
 - Periodic image autorefresh
 - Normal/Fullscreen
 - Draggable tokens with labels (just dummy for now, not sync'ed with the server)
+- SVG or HTML
 
 ## Requirements
 - Python 2.7
@@ -78,7 +91,6 @@ https://user-images.githubusercontent.com/6446344/205395528-095dee66-6fb8-4a85-9
   with no tokens)
 - Edit walls and doors
 - Multiple floors support
-- Import images (pngs/jpegs...)
 - Image/token browser
 - Shared pointers and ephemeral drawing 
 - Wall, door, token, image, drawing, fog zone, creation/deletion
@@ -90,11 +102,10 @@ https://user-images.githubusercontent.com/6446344/205395528-095dee66-6fb8-4a85-9
 - Text editor with markdown editing with cross links/embedded tools (scenes, random tables, monsters, etc)
 - Undo/redo
 - Record playing/combat history
-- Die rolling
-- Token designer (import any image, rotate, scale, circle cut and draw ring)
+- Dice rolling
+- Token designer (import any image, rotate, scale, tint, circle cut and draw ring)
 - AD&D2E Encounter builder (calculate hit points, treasure, tokens, drop on scene)
 - AD&D2E Monster browser
-- AD&D2E PHB/DMG browser
 - AD&D2E spell browser
 - AD&D2E Combat tracker (initiative, hit points, round counting for game-clock timer effects, etc)
 - AD&D2E Treasure generator

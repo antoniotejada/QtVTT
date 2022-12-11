@@ -57,9 +57,9 @@ def setup_logger(logger):
 
 logger = logging.getLogger(__name__)
 setup_logger(logger)
-#logger.setLevel(logging.DEBUG)
+logger.setLevel(logging.DEBUG)
 #logger.setLevel(logging.WARNING)
-logger.setLevel(logging.INFO)
+#logger.setLevel(logging.INFO)
 
 def report_versions():
     logger.info("Python version: %s", sys.version)
@@ -122,6 +122,8 @@ def print_gc_stats(collect = True):
         logger.info("garbage %r", gc.garbage)
         logger.info("gc counts %s", gc.get_count())
 
+def os_path_normall(path):
+    return os.path.normcase(os.path.normpath(path))
 
 def os_path_isroot(path):
     # Checking path == os.path.dirname(path) is the recommended way
@@ -495,6 +497,495 @@ def load_ds(ds_filepath, map_filepath=None, img_offset_in_cells=None):
 
     return scene
 
+
+def build_index():
+    logger.info("building index")
+    dirpath = R"..\..\jscript\vtt\_out"
+    words = dict()
+    filepath_to_title = dict()
+    title_to_filepath = dict()
+    for subdirpath in ["Monsters1", R"cdrom\WEBHELP\DMG", R"cdrom\WEBHELP\PHB"]:
+        print "indexing", subdirpath
+        for filename in os.listdir(os.path.join(dirpath, subdirpath)):
+            if (filename.lower().endswith((".htm", ".html"))):
+                with open(os.path.join(dirpath, subdirpath, filename), "r") as f:
+                    print "reading", filename
+
+                    subfilepath = os.path.join(subdirpath, filename)
+
+                    s = f.read()
+                    m = re.search("<TITLE>([^<]+)</TITLE>", s, re.IGNORECASE)
+                    if (m is not None):
+                        title = m.group(1)
+                        filepath_to_title[subfilepath] = title
+                        title_to_filepath[title] = subfilepath
+                    
+                    # Remove HTML tags so they are not indexed
+                    # XXX Note this needs a Qapp created or it will exit
+                    #     without any warnings
+                    frag = QTextDocumentFragment.fromHtml(s)
+                    s = frag.toPlainText()
+                    
+                    print "tokenizing", filename
+                    # XXX Use some Qt class to remove HTML tags?
+                    for word in re.split(r"\W+", s):
+                        if (word != ""):
+                            ss = words.get(word, set())
+                            ss.add(subfilepath)
+                            words[word] = ss
+                    print "tokenized"
+        
+    # XXX Also look at the index file cdrom\WEBHELP\INDEX.HHK which is XML
+    # XXX Could gzip it
+    with open(os.path.join("_out", "index.json"), "w") as f:
+        json.dump(
+            { 
+                "word_to_filepaths" : {key : list(words[key]) for key in words }, 
+                "filepath_to_title" : filepath_to_title,
+                "title_to_filepath" : title_to_filepath
+            }, f, indent=2
+        )
+
+
+
+class DocBrowser(QWidget):
+    """
+    Documentation browser with HTML browser, filtering/searching, filter/search
+    results list, filter/search results list and hit navigation and table of
+    contents tree
+    """
+    def __init__(self, parent=None):
+        super(DocBrowser, self).__init__(parent)
+
+        # XXX Note Qt QTextEdit supports markdown format since 5.14 but the
+        #     installed version is 5.3.1. Would need to roll own markdown to
+        #     rich text editor (see
+        #     https://doc.qt.io/qt-6/richtext-structure.html for tables, etc) or
+        #     to html (note plain markdown doesn't support tables, so ideally
+        #     would need to be a mixed markdown/html editor?)
+        #     Could also use a webview with markdown.js/marked.js or such
+        #     Could also use some python markdown package to translate to richtext
+        #     or html
+
+        # XXX Allow page bookmarks
+        # XXX Allow query bookmarks eg title:monstrous to search a monster,
+        #     title:wizard title:spell to search for a wizard spell
+        # XXX Allow hiding the query and result list
+
+        # XXX Missing sync listitem when navigating if possible?
+
+        indexFilepath = os.path.join("_out", "index.json")
+        if (not os.path.exists(indexFilepath)):
+            build_index()
+
+        with open(indexFilepath, "r") as f:
+            js = json.load(f)
+
+        index = Struct()
+        index.word_to_filepaths = js["word_to_filepaths"]
+        index.title_to_filepath = js["title_to_filepath"]
+        index.filepath_to_title = js["filepath_to_title"]
+        
+        keys = index.word_to_filepaths.keys()
+        # Convert from dict of lists to dict of sets, use lowercase as key to
+        # make it case-insensitive
+        for key in keys:
+            s = set(index.word_to_filepaths[key])
+            del index.word_to_filepaths[key]
+            index.word_to_filepaths[key.lower()] = set(index.word_to_filepaths.get(key.lower(), [])) | s
+
+        lineEdit = QLineEdit(self)
+        listWidget = QListWidget()
+        tocTree = QTreeWidget()
+        tocTree.setColumnCount(1)
+        tocTree.setHeaderHidden(True)
+        
+        self.lastCursor = None
+        self.lastPattern = None
+        self.curTocFilePath = None
+        self.curTocItem = None
+        self.index = index
+        
+        # XXX Have browser zoom, next, prev buttons / keys
+    
+        textEdit = QTextBrowser()
+
+        # Don't focus these on wheel scroll
+        textEdit.setFocusPolicy(Qt.StrongFocus)
+        listWidget.setFocusPolicy(Qt.StrongFocus)
+        self.textEdit = textEdit
+        self.lineEdit = lineEdit
+        self.listWidget = listWidget
+        self.tocTree = tocTree
+        
+
+        lineEdit.textChanged.connect(self.textChanged)
+        lineEdit.returnPressed.connect(self.returnPressed)
+        listWidget.currentItemChanged.connect(self.listCurrentItemChanged)
+        textEdit.sourceChanged.connect(self.browserSourceChanged)
+        tocTree.currentItemChanged.connect(self.treeCurrentItemChanged)
+        
+        test_font = True
+        if (test_font):
+            # XXX Temporary font mocking, use CSS or such
+            fontId = QFontDatabase.addApplicationFont(os.path.join("_out", "fonts", "Raleway-Regular.ttf"))
+            logger.info("Font Families %s",QFontDatabase.applicationFontFamilies(fontId))
+            font = QFont("Raleway")
+            font.setPointSize(10)
+            #font.setWeight(QFont.Bold)
+            textEdit.setFont(font)
+
+        # QTextEdit can display html but for readonly browsing it's easier to
+        # use QTextBrowser since it has navigation implemented out of the box
+        # XXX In theory TextBrowser should already be using
+        #     TextBrowserInteraction which contains LinksAccessibleXXX ?
+        textEdit.setTextInteractionFlags(textEdit.textInteractionFlags() | Qt.LinksAccessibleByMouse)
+
+        # When setting the html text manually, the images and links can be
+        # resolved by either replacing them (with or without file: protocol) or
+        # using setSearchPaths to the absolute or relative path where the html
+        # comes from
+        #html = open("_out/html/dragcred.html", "r").read()
+        # This works
+        #textEdit.setSearchPaths([R"_out\html"]) 
+        # Setting setMetaInformation with an absolute or relative file: url,
+        # works only for images on the first page, but then the other urls in the
+        # page don't work
+        #textEdit.document().setMetaInformation(QTextDocument.DocumentUrl, "file:_out/html/dragcred.html")
+        #textEdit.setHtml(html)
+
+        # Using setSource works with both images and other urls, no need to do
+        # anything else
+        #textEdit.setSource(QUrl.fromLocalFile(R"..\..\jscript\vtt\_out\cdrom\WEBHELP\MM\DD03846.HTM"))
+        #textEdit.setSource(QUrl.fromLocalFile(R"..\..\jscript\vtt\_out\Monsters1\MM00057.htm"))
+        #textEdit.setSource(QUrl.fromLocalFile(R"..\..\jscript\vtt\_out\monstrousmanual\d\dragcgre.html"))
+        #textEdit.setSource(QUrl.fromLocalFile(R"..\..\jscript\vtt\_out\mm\dragcred.html"))
+        
+        
+        hsplitter = QSplitter(Qt.Horizontal)
+        hsplitter.addWidget(tocTree)
+        hsplitter.addWidget(textEdit)
+        hsplitter.setStretchFactor(1, 20)
+        
+        vsplitter = QSplitter(Qt.Vertical)
+        vsplitter.addWidget(listWidget)
+        vsplitter.addWidget(hsplitter)
+        vsplitter.setStretchFactor(1, 10)
+
+        vbox = QVBoxLayout()
+        vbox.addWidget(lineEdit, 0)
+        vbox.addWidget(vsplitter)
+
+        self.setLayout(vbox)        
+
+        return 
+
+    def returnPressed(self):
+        logger.info("returnPressed modifiers 0x%x ctrl 0x%x shift 0x%x ", 
+            int(qApp.keyboardModifiers()),
+            int(qApp.keyboardModifiers()) & Qt.ControlModifier,
+            int(qApp.keyboardModifiers()) & Qt.ShiftModifier
+        )
+        # PyQt complains if 0 is passed as findFlags to find, use
+        # FindCaseSensitively for no flags since QRegexp search ignores that
+        # anyway
+        findFlags = QTextDocument.FindBackward if ((int(qApp.keyboardModifiers()) & Qt.ShiftModifier) != 0) else QTextDocument.FindFlag(0)
+
+        # Yellow the previously current position
+        fmt = self.lastCursor.charFormat()
+        fmt.setBackground(Qt.yellow)
+        self.lastCursor.setCharFormat(fmt)
+        self.textEdit.setTextCursor(self.lastCursor)
+
+        if (((int(qApp.keyboardModifiers()) & Qt.ControlModifier) != 0) or 
+            (not self.textEdit.find(QRegExp(self.lastPattern, Qt.CaseInsensitive), findFlags))):
+            logger.info("findFlags %d", findFlags)
+            delta = 1
+            if (findFlags == QTextDocument.FindBackward):
+                delta = -1
+            logger.info("Going to %d item", delta)
+            # XXX If there's only one item this fails to trigger the signal
+            #     and restart the search, on one hand this tells the user the
+            #     search is over instead of cycling the page over and over, 
+            #     but with two files it would be cycling through both?
+            self.listWidget.setCurrentRow((self.listWidget.currentRow() + delta) % self.listWidget.count())
+
+        else:
+            # Orange the next find
+            textCursor = self.textEdit.textCursor()
+            self.lastCursor = QTextCursor(textCursor)
+            fmt = textCursor.charFormat()
+            fmt.setBackground(QColor("orange"))
+            textCursor.setCharFormat(fmt)
+            self.textEdit.setTextCursor(textCursor)
+
+            textCursor.clearSelection()
+            self.textEdit.setTextCursor(textCursor)
+
+    def textChanged(self, s):
+        
+        commonResults = set()
+        # Another option is to use a QCompleter, which works but only has three
+        # kinds of search: prefix, suffix and contains, doesn't support exact
+        # word search which is normally the most accurate result if you know
+        # what you are looking for
+        for word in s.split():
+            logger.info("Matching word %r", word)
+            
+            # XXX Ideally should first match title by exact word, then
+            #     title by prefix, then body by exact word, then body by
+            #     prefix, then body by contains, until max matches are
+            #     filled, how would that affect findprev/next navigation?
+
+            if (word.startswith("title:")):
+                # XXX Have other keywords or shortcuts (eg PHB) and a
+                #     language for filtering eg title:hobgoblin,
+                #     toc:spell (search all tocs), dir:PHB (search in
+                #     the phb dir), terrain:arctic etc for MM, ! for negating
+                #     filter?
+
+                # XXX For matching multi word titles one title:prefix is
+                #     needed per word, use title:"a b c"  or use title:
+                #     for all the words until end of line?
+                
+                # XXX Do substring match if not enough hits, but always
+                #     sort exact matches first? How does that affect
+                #     findnext/prev navigation?
+                word = word[len("title:"):]
+                results = set()
+                # XXX Do a reverse hash for title to filepath
+                for filepath, title in self.index.filepath_to_title.iteritems():
+                    if (re.search(r"\b%s\b" % word, title, re.IGNORECASE) is not None):
+                        results.add(filepath)
+
+            else:
+                # Find in body
+                results = self.index.word_to_filepaths.get(word.lower(), commonResults)
+            
+            logger.info("Word %r matched to %s", word, results)
+
+            if (len(results) == 0):
+                # No matches, further intersections will be empty, bail out
+                break
+
+            if (len(commonResults) > 0):
+                commonResults = commonResults & results
+                    
+            else:
+                commonResults = results
+
+        items = []
+        i = 0
+        max_hits = 50
+        
+        for filepath in commonResults:
+            title = self.index.filepath_to_title[filepath]
+            #logger.info(title)
+            items.append("%s" % title)
+            i += 1
+            if (i > max_hits):
+                break
+
+        items = sorted(items)
+
+        self.listWidget.clear()
+        if (len(items) == 0):
+            # Empty results, reload the current document so marks are cleared
+            self.textEdit.setSource(self.textEdit.source())
+
+        else:
+            self.listWidget.addItems(items)
+            logger.info("Going to %d item", 0)
+            self.listWidget.setCurrentRow(0)
+
+    def treeCurrentItemChanged(self, current, previous):
+        if (current is None):
+            return
+
+        filepath = current.data(Qt.UserRole, 0)
+        filepath = os_path_normall(filepath)
+        urlpath = os_path_normall(self.textEdit.source().path())
+
+        logger.info("Sync browser to tree %s", filepath)
+        if (urlpath != filepath):
+            url = QUrl.fromLocalFile(filepath)
+            logger.info("Setting source from %r to %r", urlpath, url)
+            self.textEdit.setSource(url)
+            
+    def browserSourceChanged(self, url):
+        logger.info("browserSourceChanged %r", url.path())
+        filepath = os_path_normall(url.path())
+            
+        # XXX Preprocess the toc into a json or such
+        tocFilepath = None
+        if (os_path_normall("cdrom/WEBHELP/PHB") in filepath):
+            # The different levels are expressed as font sizes 4 and 3
+            tocFilepath = "cdrom\WEBHELP\PHB\DD01405.HTM"
+
+        elif (os_path_normall("cdrom/WEBHELP/DMG") in filepath):
+            tocFilepath = "cdrom\WEBHELP\DMG\DD00183.HTM"
+            # The different levels are expressed as font sizes 4 and 3            
+
+        else:
+            # XXX Use MM00000.htm for monsters (alphabetic index) 
+            logger.info("Hiding toc")
+            self.tocTree.hide()
+            self.curTocFilePath = None
+
+        if (tocFilepath is not None):
+            logger.info("Showing toc")
+            self.tocTree.show()
+            if (tocFilepath != self.curTocFilePath):
+                self.curTocFilePath = tocFilepath
+                # Generate toc and set on tree
+                self.tocTree.clear()
+                logger.info("Generating toc for %r", tocFilepath)
+                with open(os.path.join(R"..\..\jscript\vtt\_out", tocFilepath), "r") as f:
+                    # XXX Instead of regexp parsing the html, another option
+                    #     would be to parse with Qt and detect font sizes,
+                    #     but it doesn't feel any better
+                    tocText = f.read()
+                    curItem = None
+                    curFontSize = None
+                    for m in re.finditer(r'<FONT [^>]*SIZE="(\d+)[^>"]*">', tocText):
+                        fontSize = int(m.group(1))
+                        tocEntryText = tocText[m.start():]
+                        # find the font end
+                        m = re.search(r'</FONT>', tocEntryText)
+                        tocEntryText = tocEntryText[:m.end()]
+                        # find the anchor, remove any fragments
+                        m = re.search(r'<A HREF="([^#"]*)(?:#[^"]*)?">([^<]+)</A>', tocEntryText)
+                        if (m is None):
+                            # There are some headings in the toc, those are not
+                            # really toc entries, in addition, some entry names
+                            # are empty (they replicate the next one with an
+                            # empty text), don't match those
+                            continue
+                        entryHref = m.group(1)
+                        entryName = m.group(2)
+
+                        logger.debug("Found toc entry %d - %r", fontSize, entryName)
+                        
+                        if (curItem is None):
+                            # XXX Create the dummy entry elsewhere? 
+                            # XXX The toc tree could also show all the
+                            #     registered tocs at the top level?
+                            parentItem = QTreeWidgetItem(["Preface"])
+                            self.tocTree.addTopLevelItem(parentItem)
+                            parentItem.setData(Qt.UserRole, 0, tocFilepath)
+                            
+                            curFontSize = fontSize
+                            curItem = QTreeWidgetItem([entryName])
+                            parentItem.addChild(curItem)
+
+                        elif (fontSize == curFontSize):
+                            parentItem = curItem.parent()
+                            curItem = QTreeWidgetItem([entryName])
+                            if (parentItem is not None):
+                                parentItem.addChild(curItem)
+                            else:
+                                self.tocTree.addTopLevelItem(curItem)
+
+                        elif (fontSize > curFontSize):
+                            # Go to the parent, add to it
+                            # XXX Assumes contiguous font sizes
+                            parentItem = curItem
+                            for _ in xrange(fontSize - curFontSize + 1):
+                                parentItem = parentItem.parent()
+                            curItem = QTreeWidgetItem([entryName])
+                            if (parentItem is not None):
+                                parentItem.addChild(curItem)
+                            else:
+                                self.tocTree.addTopLevelItem(curItem)
+                            curFontSize = fontSize
+                            
+                        elif (fontSize < curFontSize):
+                            # Shouldn't skip levels when nesting
+                            assert (curFontSize - fontSize) == 1
+                            parentItem = curItem
+                            curItem = QTreeWidgetItem([entryName])
+                            curFontSize = fontSize
+                            parentItem.addChild(curItem)
+
+                        curItem.setData(Qt.UserRole, 0, os.path.join(os.path.dirname(filepath), entryHref))
+
+            # Activate the item for this filepath
+            itemStack = [self.tocTree.topLevelItem(0)]
+            nfilepath = os_path_normall(filepath)
+            while (len(itemStack) > 0):
+                item = itemStack.pop()
+                # Note hrefs case may mismatch from filepaths case and from
+                # XXX Fix outside of the loop?
+
+                nitempath = os_path_normall(item.data(Qt.UserRole, 0))
+                if (nfilepath == nitempath):
+                    logger.info("Found item match %r", nitempath)
+                    self.tocTree.setCurrentItem(item)
+                    break
+                # Push the next sibling
+                if (item.parent() is not None): 
+                    i = item.parent().indexOfChild(item)
+                    if ((i >= 0) and (i + 1 < item.parent().childCount())):
+                        itemStack.append(item.parent().child(i + 1))
+                else:
+                    i = self.tocTree.indexOfTopLevelItem(item)
+                    if ((i >= 0) and (i + 1 < self.tocTree.topLevelItemCount())):
+                        itemStack.append(self.tocTree.topLevelItem(i+1))
+                # Push the first child
+                if (item.childCount() > 0):
+                    itemStack.append(item.child(0))
+                
+
+        # We could also show the outline for the browsed html file but this
+        # is not useful for the currently indexed files since they have a
+        # very simple structure 
+        
+    def listCurrentItemChanged(self, current, previous):
+
+        if (current is None):
+            # The list became empty, nothing to do 
+            return
+
+        # Load the new file into the browser
+        l = self.index.filepath_to_title.values()
+        i = index_of(l, current.text())
+        filepath = self.index.filepath_to_title.keys()[i]
+
+        self.textEdit.setSource(
+            QUrl.fromLocalFile(os.path.join(R"..\..\jscript\vtt\_out", filepath)))
+
+        # Highlight the search string removing any leading "title:" if
+        # present
+        # XXX Lineedit should probably export the list of words being
+        #     searched without title:
+        pattern = str.join("|", [r"\b%s\b" % w[max(0, w.find("title:")):] for w in self.lineEdit.text().split()])
+        while (self.textEdit.find(QRegExp(pattern, Qt.CaseInsensitive))):
+            cursor = self.textEdit.textCursor()
+            fmt = cursor.charFormat()
+            fmt.setBackground(Qt.yellow)
+            cursor.setCharFormat(fmt)
+
+        # Note it's possible no hits were found in the body if the word was
+        # found in the title
+
+        # Go to the first finding orange it and clear the selection
+        textCursor = self.textEdit.textCursor()
+        textCursor.movePosition(QTextCursor.Start)
+        self.textEdit.setTextCursor(textCursor)
+        self.textEdit.find(QRegExp(pattern, Qt.CaseInsensitive))
+
+        # Orange the first finding
+        textCursor = self.textEdit.textCursor()
+        self.lastCursor = QTextCursor(textCursor)
+        self.lastPattern = pattern
+
+        fmt = textCursor.charFormat()
+        fmt.setBackground(QColor("orange"))
+        textCursor.setCharFormat(fmt)
+        self.textEdit.setTextCursor(textCursor)
+
+        textCursor.clearSelection()
+        self.textEdit.setTextCursor(textCursor)
     
 # Image bytes (eg PNG or JPEG) between the app thread and the http server thread
 # XXX This needs to be more flexible once there are multiple images shared, etc
@@ -528,11 +1019,35 @@ class VTTHTTPRequestHandler(SimpleHTTPServer.SimpleHTTPRequestHandler):
             logger.debug("returning")
             ctype = imctype
 
+        elif (self.path == "/fog.svg"):
+            ctype = "image/svg+xml"
+            clength = os.path.getsize("_out/fog.svg")
+
+            f = open("_out/fog.svg", "rb")
+
         elif (self.path == "/index.html"):
+            # XXX This neesd updating to use fog.svg instead of image.png if
+            #     using svg
             ctype = "text/html"
             clength = os.path.getsize("index.html")
 
             f = open("index.html", "rb")
+
+        elif (self.path.startswith("/token.png")):
+            ctype = "image/png"
+
+            # XXX This is just a mock up, at the very least should send more
+            #     compressed jpegs
+            if (self.path.endswith("?id=1")):
+                filename = "Female_Elf_Warrior_T02.png"
+            
+            else:
+                filename = "Female_Human_Wizard_T01.png"
+            
+            filepath = os.path.join("_out", "tokens", filename)
+            clength = os.path.getsize(filepath)
+
+            f = open(filepath, "rb")
 
         else:
             # Can't use super since BaseRequestHandler doesn't derive from object
@@ -573,6 +1088,7 @@ def server_thread(arg):
 g_draw_walls = True
 g_blend_map_fog = False
 g_draw_map_fog = False
+g_draw_grid = True
 most_recently_used_max_count = 10
 
 class ImageWidget(QScrollArea):
@@ -782,8 +1298,6 @@ class VTTMainWindow(QMainWindow):
     def __init__(self, parent = None):
         super(VTTMainWindow, self).__init__(parent)
 
-        
-
         self.campaign_filepath = None
         self.recent_filepaths = []
 
@@ -814,7 +1328,7 @@ class VTTMainWindow(QMainWindow):
         tree = QTreeWidget()
         self.tree = tree
 
-        self.createBrowser()
+        self.browser = DocBrowser()
 
         self.docks = [
             (QDockWidget("Player View", self), self.imageWidget),
@@ -854,7 +1368,8 @@ class VTTMainWindow(QMainWindow):
             self.recent_filepaths.append(filepath)
         # Set the first as most recent, will keep all entries the same but will
         # update all the menus
-        self.setRecentFile(self.recent_filepaths[0])
+        if (len(self.recent_filepaths) > 0):
+            self.setRecentFile(self.recent_filepaths[0])
             
         # Set the scene, which will update graphicsview, tree, imagewidget
         if (len(sys.argv) == 1):
@@ -907,8 +1422,13 @@ class VTTMainWindow(QMainWindow):
             self.recentFileActs.append(
                     QAction(self, visible=False, triggered=self.openRecentFile))
 
+        self.deleteItemAct = QAction("&Delete Item", self, shortcut="del", triggered=self.deleteItem)
+        self.importTokenAct = QAction("Import &Token", self, shortcut="ctrl+T", triggered=self.importToken)
+        self.importImageAct = QAction("Import &Image", self, shortcut="ctrl+I", triggered=self.importImage)
         self.clearWallsAct = QAction("Clear All &Walls", self, triggered=self.clearWalls)
         self.clearDoorsAct = QAction("Clear All &Doors", self, triggered=self.clearDoors)
+        self.copyScreenshotAct = QAction("DM &View &Screenshot", self, shortcut="ctrl+c", triggered=self.copyScreenshot)
+        self.copyFullScreenshotAct = QAction("DM &Full Screenshot", self, shortcut="ctrl+shift+c", triggered=self.copyFullScreenshot)
 
         self.aboutAct = QAction("&About", self, triggered=self.about)
 
@@ -934,8 +1454,16 @@ class VTTMainWindow(QMainWindow):
         fileMenu.addAction(self.exitAct)
         
         editMenu = QMenu("&Edit", self)
+        editMenu.addAction(self.importImageAct)
+        editMenu.addAction(self.importTokenAct)
+        editMenu.addSeparator()
+        editMenu.addAction(self.deleteItemAct)
+        editMenu.addSeparator()
         editMenu.addAction(self.clearDoorsAct)
         editMenu.addAction(self.clearWallsAct)
+        editMenu.addSeparator()
+        editMenu.addAction(self.copyScreenshotAct)
+        editMenu.addAction(self.copyFullScreenshotAct)
 
         helpMenu = QMenu("&Help", self)
         helpMenu.addAction(self.aboutAct)
@@ -966,53 +1494,6 @@ class VTTMainWindow(QMainWindow):
         self.statusFilepath.setFrameStyle(frame_style)
         self.statusBar().addPermanentWidget(self.statusFilepath)
 
-    def createBrowser(self):
-        # XXX Note Qt QTextEdit supports markdown format since 5.14 but the
-        #     installed version is 5.3.1. Would need to roll own markdown to
-        #     rich text editor (see
-        #     https://doc.qt.io/qt-6/richtext-structure.html for tables, etc) or
-        #     to html (note plain markdown doesn't support tables, so ideally
-        #     would need to be a mixed markdown/html editor?)
-        #     Could also use a webview with markdown.js/marked.js or such
-        #     Could also use some python markdown package to translate to richtext
-        #     or html
-        
-        textEdit = QTextBrowser()
-        self.browser = textEdit
-        test_font = True
-        if (test_font):
-            # XXX Temporary font mocking, use CSS or such
-            fontId = QFontDatabase.addApplicationFont(os.path.join("_out", "fonts", "Raleway-Regular.ttf"))
-            logger.info("Font Families %s",QFontDatabase.applicationFontFamilies(fontId))
-            font = QFont("Raleway")
-            font.setPointSize(10)
-            #font.setWeight(QFont.Bold)
-            textEdit.setFont(font)
-
-        # QTextEdit can display html but for readonly browsing it's easier to
-        # use QTextBrowser since it has navigation implemented out of the box
-        textEdit.setTextInteractionFlags(textEdit.textInteractionFlags() | Qt.LinksAccessibleByMouse)
-
-        # When setting the html text manually, the images and links can be
-        # resolved by either replacing them (with or without file: protocol) or
-        # using setSearchPaths to the absolute or relative path where the html
-        # comes from
-        #html = open("_out/html/dragcred.html", "r").read()
-        # This works
-        #textEdit.setSearchPaths([R"_out\html"]) 
-        # Setting setMetaInformation with an absolute or relative file: url,
-        # works only for images on the first page, but then the other urls in the
-        # page don't work
-        #textEdit.document().setMetaInformation(QTextDocument.DocumentUrl, "file:_out/html/dragcred.html")
-        #textEdit.setHtml(html)
-
-        # Using setSource works with both images and other urls, no need to do
-        # anything else
-        #textEdit.setSource(QUrl.fromLocalFile(R"..\..\jscript\vtt\_out\cdrom\WEBHELP\MM\DD03846.HTM"))
-        textEdit.setSource(QUrl.fromLocalFile(R"..\..\jscript\vtt\_out\Monsters1\MM00057.htm"))
-        #textEdit.setSource(QUrl.fromLocalFile(R"..\..\jscript\vtt\_out\monstrousmanual\d\dragcgre.html"))
-        #textEdit.setSource(QUrl.fromLocalFile(R"..\..\jscript\vtt\_out\mm\dragcred.html"))
-        
 
     def about(self):
         QMessageBox.about(self, "About QtVTT",
@@ -1071,6 +1552,7 @@ class VTTMainWindow(QMainWindow):
             self.gscene.clear()
             self.gscene.setParent(None)
         self.map_fog_item = None
+        self.fog_polys = []
 
         gscene = QGraphicsScene()
         # XXX It's not clear the BSP is helping on dynamic scenes with fog
@@ -1163,6 +1645,89 @@ class VTTMainWindow(QMainWindow):
 
         self.setScene(scene)
 
+    
+    def importToken(self):
+        dirpath = os.path.curdir if self.campaign_filepath is None else os.path.dirname(self.campaign_filepath)
+        filepath, _ = QFileDialog.getOpenFileName(self, "Import Token", dirpath, "Images (*.png *.jpg *.jpeg *.jfif *.webp)")
+
+        if (filepath == ""):
+            filepath = None
+
+        if (filepath is None):
+            return
+        
+        s = Struct(**{
+            # Center the token in the current viewport
+            "scene_pos": 
+                qtuple(self.graphicsView.mapToScene(QPoint(*qtuple(self.graphicsView.size()/2.0))))
+            , 
+            # XXX Fix all float casting this malarkey, cast it in whatever
+            #     operation needs it, not in the input data
+            "scale": float(self.scene.cell_diameter), 
+            "name": os.path.splitext(os.path.basename(filepath))[0], 
+            # XXX Fix all the path mess for embedded assets
+            "filepath": os.path.relpath(filepath)
+        })
+        self.scene.map_tokens.append(s)
+        # XXX Use something less heavy handed than setScene
+        self.setScene(self.scene, self.campaign_filepath)
+
+    def importImage(self):
+        dirpath = os.path.curdir if self.campaign_filepath is None else os.path.dirname(self.campaign_filepath)
+        filepath, _ = QFileDialog.getOpenFileName(self, "Import Image", dirpath, "Images (*.png *.jpg *.jpeg *.jfif *.webp)")
+
+        if (filepath == ""):
+            filepath = None
+
+        if (filepath is None):
+            return
+
+        # Try to guess the number of cells
+        m = re.match(r".*\D+(\d+)x(\d+)\D+", filepath)
+        if (m is not None):
+            img_size_in_cells = (int(m.group(1)), int(m.group(2)))
+            logger.debug("img size in cells %s", img_size_in_cells)
+
+        else:
+            size = QImage(filepath).size()
+            text, ok = QInputDialog.getText(
+                self,
+                "Image size in cells (%dx%d)" % (size.width(), size.height()), 
+                "Cells (width, height):", QLineEdit.Normal, 
+                "%d, %d" % (round(float(size.width()) / self.scene.cell_diameter), 
+                    round(float(size.height()) / self.scene.cell_diameter))
+            )
+            if ((not ok) or (text == "")):
+                return
+            img_size_in_cells = [int(i) for i in text.split(",")]
+
+        s = Struct(**{
+            # XXX Fix all the path mess for embedded assets
+            "filepath" :  os.path.relpath(filepath), 
+            "scene_pos" : [0.0,0.0],
+            # Note this stores a resolution independent scaling, it has
+            # to be divided by the width at load time
+            # XXX This assumes the scaling preserves the aspect ratio, may 
+            #     need to store scalex and scaly
+            # Fit it on the viewport by default
+            "scale" : float(self.scene.cell_diameter * img_size_in_cells[0])
+        })
+        self.scene.map_images.append(s)
+
+        # XXX Use something less heavy handed
+        self.setScene(self.scene, self.campaign_filepath)
+        
+    def deleteItem(self):
+        # XXX This only expects tokens for the time being
+
+        # XXX This should disable the menu once hooked on focuschange
+        if (self.gscene.focusItem() is None):
+            return
+
+        self.scene.map_tokens.remove(self.gscene.focusItem().data(1))
+        # XXX Use something less heavy-handed
+        self.setScene(self.scene, self.campaign_filepath)
+
     def clearWalls(self):
         if (QMessageBox.question(self, "Clear all walls", 
             "Are you sure you want to clear all walls in the scene?") != QMessageBox.Yes):
@@ -1181,6 +1746,24 @@ class VTTMainWindow(QMainWindow):
 
         # XXX Use something less heavy handed
         self.setScene(self.scene, self.campaign_filepath)
+
+    def copyScreenshot(self):
+        logger.info("copyScreenshot")
+        qpix = self.graphicsView.viewport().grab()
+        
+        qApp.clipboard().setPixmap(qpix)
+
+    def copyFullScreenshot(self):
+        logger.info("copyFullScreenshot")
+        gscene = self.gscene
+        img_scale = 1.0
+        qim = QImage(gscene.sceneRect().size().toSize().expandedTo(QSize(1, 1)) * img_scale, QImage.Format_ARGB32)
+        p = QPainter(qim)
+        gscene.render(p)
+        p.end()
+        
+        qApp.clipboard().setImage(qim)
+
         
     def importDs(self):
         # Get the ds filename
@@ -1279,9 +1862,12 @@ class VTTMainWindow(QMainWindow):
 
         tree.clear()
         tree.setColumnCount(1)
+        tree.setHeaderHidden(True)
 
         scene_item = QTreeWidgetItem(["Scene 1"])
         tree.addTopLevelItem(scene_item)
+
+        scene_item.addChild(QTreeWidgetItem(["%d" % self.scene.cell_diameter]))
         
         folder_item = QTreeWidgetItem(["Walls (%d)" % len(self.scene.map_walls)])
         scene_item.addChild(folder_item)
@@ -1355,10 +1941,12 @@ class VTTMainWindow(QMainWindow):
             door = door_item.data(0)
             door.open = (door_item in self.open_door_items)
         
-        # Get the scene as a dict
+        # Get the scene as a dict copy (need a copy since the fields are
+        # modified below and don't want to modify the original scene with
+        # json-friendly version of the fields)
         # XXX This should be recursive so it doesn't need to be done explicitly
         #     below? or have a json formatter that understands Struct
-        d = vars(self.scene)
+        d = dict(vars(self.scene))
 
         # Collect doors as dicts instead of Structs
         d["map_doors"] = [vars(door) for door in d["map_doors"]]
@@ -1388,8 +1976,8 @@ class VTTMainWindow(QMainWindow):
             { 
                 "filepath" : token_item.data(0), 
                 "scene_pos" : qtuple(token_item.scenePos()),
-                # Note this stores a resolution independent scaling, it has
-                # to be divided by the at load time
+                # Note this stores a resolution independent scaling, it has to
+                # be divided by the width at load time
                 # XXX This assumes the scaling preserves the aspect ratio, may 
                 #     need to store scalex and scaly
                 "scale" : token_item.scale() * token_item.pixmap().width(),
@@ -1403,8 +1991,8 @@ class VTTMainWindow(QMainWindow):
             {
                 "filepath" :  image_item.data(0), 
                 "scene_pos" : qtuple(image_item.scenePos()),
-                # Note this stores a resolution independent scaling, it has
-                # to be divided by the at load time
+                # Note this stores a resolution independent scaling, it has to
+                # be divided by the width at load time
                 # XXX This assumes the scaling preserves the aspect ratio, may 
                 #     need to store scalex and scaly
                 "scale" : image_item.scale() * image_item.pixmap().width()
@@ -1443,6 +2031,7 @@ class VTTMainWindow(QMainWindow):
             # XXX Embedding the assets should be optional, eg if it's actively
             #     editing the map in an external tool it's not productive to
             #     have to update the zip file everytime
+            # XXX Could do embedded if .qvt, non-embedded if .json
             
             # XXX Have an option to embed the assets as data urls
             
@@ -1502,6 +2091,7 @@ class VTTMainWindow(QMainWindow):
             # Note this uses nested items instead of groups since groups change
             # the token rect to include the label but the parent item doesn't
             # contain the child bounding rect
+            logger.debug("Populating token %r", map_token.filepath)
             filepath = map_token.filepath
             pix = QPixmap(filepath)
             max_token_size = QSize(64, 64)
@@ -1522,6 +2112,15 @@ class VTTMainWindow(QMainWindow):
             font = txtItem.font()
             font.setPointSize(txtItem.font().pointSize() *0.75)
             txtItem.setFont(font)
+            # XXX This needs to hook on focus out and enter to unfocus and to 
+            #     recenter the label and to update the scene tree widget
+            #     Note 
+            #     txtItem.document().setDefaultTextOption(QTextOption(Qt.AlignCenter))
+            #     does center the text in the width set with setTextWidth, but
+            #     the item anchor is still the item position so still needs to be
+            #     set to the top left corner, which changes depending on the 
+            #     text length.
+            txtItem.setTextInteractionFlags(Qt.TextEditorInteraction)
             txtItem.setScale(1.0/pixItem.scale())
             # Calculate the position taking into account the text item reverse
             # scale                
@@ -1535,6 +2134,7 @@ class VTTMainWindow(QMainWindow):
 
             item.setPos(*map_token.scene_pos)
             item.setData(0, filepath)
+            item.setData(1, map_token)
             item.setFlags(QGraphicsItem.ItemIsFocusable | QGraphicsItem.ItemIsSelectable | QGraphicsItem.ItemIsMovable)
             item.setCursor(Qt.SizeAllCursor)
 
@@ -1545,6 +2145,7 @@ class VTTMainWindow(QMainWindow):
     def populateImages(self, gscene, scene):
         self.image_items = set()
         for image in scene.map_images:
+            logger.debug("Populating image %r", image.filepath)
             item = QGraphicsPixmapItem(QPixmap(image.filepath))
             item.setPos(*image.scene_pos)
             item.setScale(image.scale / item.pixmap().width())
@@ -1603,12 +2204,31 @@ class VTTMainWindow(QMainWindow):
 
         gscene.addItem(self.all_doors_item)
 
+    def populateGrid(self, gscene, scene):
+        rect = gscene.itemsBoundingRect()
+        self.grid_item = QGraphicsItemGroup()
+        pen = QPen(QColor(0, 0, 0, 128))
+        x, y = rect.left(), rect.top()
+        while (x < rect.right()):
+            lineItem = QGraphicsLineItem(x, rect.top(), x, rect.bottom())
+            lineItem.setPen(pen)
+            self.grid_item.addToGroup(lineItem)
+            x += scene.cell_diameter
+
+        while (y < rect.bottom()):
+            lineItem = QGraphicsLineItem(rect.left(), y, rect.right(), y)
+            lineItem.setPen(pen)
+            self.grid_item.addToGroup(lineItem)
+            y += scene.cell_diameter
+
+        gscene.addItem(self.grid_item)
 
     def populateGraphicsScene(self, gscene, scene):
 
         # Populated in z-order
-
         self.populateImages(gscene, scene)
+        
+        self.populateGrid(gscene, scene)
 
         self.populateWalls(gscene, scene)
 
@@ -1616,17 +2236,164 @@ class VTTMainWindow(QMainWindow):
 
         self.populateTokens(gscene, scene)
 
-        # Set the rect before adding the viz frusta
-        gscene.setSceneRect(gscene.itemsBoundingRect())
-
+        # Set the rect, needs to be done before adding the fog since they add
+        # very large polygons which would explode the bounding rect
+        # unnecessarily
+        rect = gscene.itemsBoundingRect()
         
+        gscene.setSceneRect(rect)
+        
+    def generateSVG(self):
+        # XXX updateFog generates fog_polys which is needed by generateSVG, but
+        #     should use something lighter since it also generates the
+        #     QGraphicScene items
+        self.updateFog(True, False)
+        # The amount of svg to render can be:
+        # - svg: PC and NPC tokens, map, and fog are all rendered using svg.
+        #   This uses a lot less load since only fog polygons and token
+        #   positions need to be refreshed, but it's insecure since the clear
+        #   map is sent, also empirically pinch scaling on the browser can show
+        #   slivers of the map.
+        # - svg with fog as image mask: Only requires sending an image of the
+        #   fog on updates, which will also compress better and even be sent 
+        #   donscaled. Still insecure.
+        # - svg with fog and map as image: player tokens are svg, map and fog
+        #   are merged into a single image. This increases the load because the
+        #   image needs to be sent whenever NPC tokens or player tokens change
+        gscene = self.gscene
+        # XXX Use svg_bytes instead of saving to files
+        with open(os.path.join("_out", "fog.svg"), "w") as f:
+            sceneRect = gscene.sceneRect()
+            f.write('<svg viewBox="%f %f %f %f" preserveAspectRatio="xMidYMid meet" onload="makeDraggable(evt)" xmlns="http://www.w3.org/2000/svg">\n' % 
+                (sceneRect.left(), sceneRect.top(), 
+                sceneRect.width(), sceneRect.height()))
+
+            # See https://raw.githubusercontent.com/petercollingridge/code-for-blog/master/svg-interaction/draggable/draggable_groups.svg
+            f.write("""
+                <style>
+                .static {
+                    cursor: not-allowed;
+                }
+                .draggable, .draggable-group {
+                    cursor: move;
+                }
+                </style>
+                
+                <script type="text/javascript"><![CDATA[
+                function makeDraggable(evt) {
+                    var svg = evt.target;
+
+                    svg.addEventListener('mousedown', startDrag);
+                    svg.addEventListener('mousemove', drag);
+                    svg.addEventListener('mouseup', endDrag);
+                    svg.addEventListener('mouseleave', endDrag);
+                    svg.addEventListener('touchstart', startDrag);
+                    svg.addEventListener('touchmove', drag);
+                    svg.addEventListener('touchend', endDrag);
+                    svg.addEventListener('touchleave', endDrag);
+                    svg.addEventListener('touchcancel', endDrag);
+
+                    function getMousePosition(evt) {
+                    var CTM = svg.getScreenCTM();
+                    if (evt.touches) { evt = evt.touches[0]; }
+                    return {
+                        x: (evt.clientX - CTM.e) / CTM.a,
+                        y: (evt.clientY - CTM.f) / CTM.d
+                    };
+                    }
+
+                    var selectedElement, offset, transform;
+
+                    function initialiseDragging(evt) {
+                        offset = getMousePosition(evt);
+
+                        // Make sure the first transform on the element is a translate transform
+                        var transforms = selectedElement.transform.baseVal;
+
+                        if (transforms.length === 0 || transforms.getItem(0).type !== SVGTransform.SVG_TRANSFORM_TRANSLATE) {
+                        // Create an transform that translates by (0, 0)
+                        var translate = svg.createSVGTransform();
+                        translate.setTranslate(0, 0);
+                        selectedElement.transform.baseVal.insertItemBefore(translate, 0);
+                        }
+
+                        // Get initial translation
+                        transform = transforms.getItem(0);
+                        offset.x -= transform.matrix.e;
+                        offset.y -= transform.matrix.f;
+                    }
+
+                    function startDrag(evt) {
+                    if (evt.target.classList.contains('draggable')) {
+                        selectedElement = evt.target;
+                        initialiseDragging(evt);
+                    } else if (evt.target.parentNode.classList.contains('draggable-group')) {
+                        selectedElement = evt.target.parentNode;
+                        initialiseDragging(evt);
+                    }
+                    }
+
+                    function drag(evt) {
+                    if (selectedElement) {
+                        evt.preventDefault();
+                        var coord = getMousePosition(evt);
+                        transform.setTranslate(coord.x - offset.x, coord.y - offset.y);
+                    }
+                    }
+
+                    function endDrag(evt) {
+                    selectedElement = false;
+                    }
+                }
+                ]]> </script>
+            """)
+                    
+            sceneRect = list(self.image_items)[0].sceneBoundingRect()
+            f.write('<image href="image.png" x="%f" y="%f" width="%f" height="%f"/>\n' %
+                (sceneRect.x(), sceneRect.top(), sceneRect.width(), sceneRect.height()))
+
+            for token_item in self.token_items:
+                sceneRect = token_item.sceneBoundingRect()
+
+                imformat = "PNG"
+                ba = QByteArray()
+                buff = QBuffer(ba)
+                buff.open(QIODevice.WriteOnly) 
+                ok = token_item.pixmap().save(buff, imformat)
+                assert ok
+                img_bytes = ba.data()
+                import base64
+
+                base64_utf8_str = base64.b64encode(img_bytes).decode('utf-8')
+
+                dataurl = 'data:image/png;base64,%s' % base64_utf8_str
+                label_item = token_item.childItems()[0]
+
+                f.write('<g class="draggable-group" transform="translate(%f,%f) scale(%f)"><image href="%s" width="%f" height="%f"/><text fill="white" font-size="10" font-family="Arial, Helvetica, sans-serif" transform="translate(%f,%f) scale(%f)">%s</text></g>\n' %
+                    (sceneRect.x(), sceneRect.top(), token_item.scale(), dataurl, token_item.pixmap().width(), token_item.pixmap().height(), 
+                        label_item.pos().x(), label_item.pos().y(), label_item.scale(), label_item.toPlainText()))
+
+                f.write('')
+
+            for poly in self.fog_polys:
+                poly_string = ["%f,%f" % point for point in poly]
+                poly_string = str.join(" ", poly_string)
+
+                # <polygon points="0,100 50,25 50,75 100,0" />
+                #s = '<polygon fill="none" stroke="black" points="%s"/>\n' % poly_string
+                s = '<polygon fill="black" stroke="black" points="%s"/>\n' % poly_string
+
+                f.write(s)
+
+            f.write("</svg>\n")
+
+
     def updateFog(self, draw_map_fog, blend_map_fog):
         
         if (self.gscene.focusItem() is None):
             logger.warning("Called updateFog with no token item!!")
             return
 
-        
         map_fog_item = self.map_fog_item
         gscene = self.gscene
         scene = self.scene
@@ -1639,6 +2406,7 @@ class VTTMainWindow(QMainWindow):
             gscene.removeItem(map_fog_item)
 
         fog = None
+        fog_polys = []
         if (draw_map_fog):
             # XXX This is not correct, the depth of the frustum required to
             #     cover the whole image is actually infinity because of the
@@ -1689,6 +2457,8 @@ class VTTMainWindow(QMainWindow):
                             (x1 + (x1 - token_x) * l, (y1 - token_y) * l), 
                             (x1, y1)
                         ]
+
+                        fog_polys.append(frustum)
                         
                         item = QGraphicsPolygonItem(QPolygonF([QPointF(p[0], p[1]) for p in frustum]))
                         item.setBrush(brush)
@@ -1698,6 +2468,7 @@ class VTTMainWindow(QMainWindow):
             gscene.addItem(fog)
 
         self.map_fog_item = fog
+        self.fog_polys = fog_polys
 
     def updateImage(self):
         logger.info("updateImage")
@@ -1717,39 +2488,50 @@ class VTTMainWindow(QMainWindow):
             qim.fill(QColor(196, 196, 196))
 
         else:
-            p = QPainter(qim)
-            # XXX Ideally this should just toggle the fog item, but that also
-            #     requires the fog to be always calculated even if g_draw_map_fog is
-            #     disabled?
-            self.updateFog(True, False)
-
-            # Hide all DM user interface helpers
-            # XXX Hiding seems to be slow, verify? Try changing all to transparent
-            #     otherwise? Have a player and a DM scene?
-            logger.info("hiding DM ui")
-            if (g_draw_walls):
-                self.all_walls_item.hide()
-            self.all_doors_item.hide()
-            logger.info("Rendering %d scene items on %dx%d image", len(gscene.items()), qim.width(), qim.height())
-            gscene.render(p)
+            use_svg = False
+            if (use_svg):
+                self.generateSVG()
+                # Use the unfogged image for svg
+                # XXX Implement svg fog, image fog or image fog + map
+                pix = list(self.image_items)[0].pixmap()
+                qim = QImage(pix)
             
-            # Restore all DM user interface helpers
-            logger.info("restoring DM ui")
-            if (g_draw_walls):
-                self.all_walls_item.show()
-            self.all_doors_item.show()
+            else:
+                
+                # XXX Ideally this should just toggle the fog item, but that also
+                #     requires the fog to be always calculated even if g_draw_map_fog is
+                #     disabled?
+                self.updateFog(True, False)
 
-            self.updateFog(g_draw_map_fog, g_blend_map_fog)
-            # This is necessary so the painter winds down before the pixmap
-            # below, otherwise it crashes with "painter being destroyed while in
-            # use"
-            p.end()
+                # Hide all DM user interface helpers
+                # XXX Hiding seems to be slow, verify? Try changing all to transparent
+                #     otherwise? Have a player and a DM scene?
+                logger.info("hiding DM ui")
+                if (g_draw_walls):
+                    self.all_walls_item.hide()
+                self.all_doors_item.hide()
+                logger.info("Rendering %d scene items on %dx%d image", len(gscene.items()), qim.width(), qim.height())
+                p = QPainter(qim)
+                gscene.render(p)
+                # This is necessary so the painter winds down before the pixmap
+                # below, otherwise it crashes with "painter being destroyed
+                # while in use"
+                p.end()
+                
+                # Restore all DM user interface helpers
+                logger.info("restoring DM ui")
+                if (g_draw_walls):
+                    self.all_walls_item.show()
+                self.all_doors_item.show()
+
+                self.updateFog(g_draw_map_fog, g_blend_map_fog)
+                
             
-            # convert QPixmap to PNG or JPEG bytes
-            # XXX This should probably be done in the http thread and cached?
-            #     But needs to check pixmap affinity or pass bytes around, also
-            #     needs to check Qt grabbing the lock and using Qt from non qt 
-            #     thread
+        # convert QPixmap to PNG or JPEG bytes
+        # XXX This should probably be done in the http thread and cached?
+        #     But needs to check pixmap affinity or pass bytes around, also
+        #     needs to check Qt grabbing the lock and using Qt from non qt 
+        #     thread
 
         logger.info("Storing into %s buffer", imformat)
         ba = QByteArray()
@@ -1816,6 +2598,11 @@ class VTTMainWindow(QMainWindow):
                     # No need to update fog since it will be done by updateImage
                     # toggles on and (maybe) off
                     self.updateImage()
+
+                elif (focusItem in self.token_items):
+                    # XXX Double click to edit size/rotation?
+                    logger.info("Editing token %s", focusItem.childItems[0].toPlainText())
+
             else:
                 pen = QPen(Qt.cyan)
                 r = self.scene.cell_diameter * 1.0
@@ -2020,11 +2807,15 @@ class VTTMainWindow(QMainWindow):
                 global g_blend_map_fog
                 g_blend_map_fog = not g_blend_map_fog
 
-
             elif (event.text() == "f"):
                 global g_draw_map_fog
                 g_draw_map_fog = not g_draw_map_fog
-            
+
+            elif (event.text() == "g"):
+                global g_draw_grid 
+                g_draw_grid = not g_draw_grid
+                self.grid_item.setVisible(g_draw_grid)
+                self.graphicsView.update()
             
             elif (event.text() == "m"):
                 if (self.player.state() != QMediaPlayer.PlayingState):
@@ -2053,7 +2844,7 @@ class VTTMainWindow(QMainWindow):
             
         return super(VTTMainWindow, self).eventFilter(source, event)
 
-            
+
 def main():
     report_versions()
     thread.start_new_thread(server_thread, (None,))
