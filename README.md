@@ -18,6 +18,11 @@ Virtual Table Top written in Python and Qt
 
 ![image](https://user-images.githubusercontent.com/6446344/206880662-6bb845c3-a5ce-48a9-81bd-bdf7380bb8b1.png)
 
+### Clipped fog polygons, light range, hidden tokens
+
+![image](https://user-images.githubusercontent.com/6446344/207979570-083f0404-b36d-4d6a-b69e-4cd095d546f7.png)
+
+
 ## Video
 
 
@@ -44,20 +49,21 @@ https://user-images.githubusercontent.com/6446344/205395528-095dee66-6fb8-4a85-9
 - Player view with line of sight, exported via http (see http server)
 - Dockable windows for multiple monitor support
 - Player view resolution independent from DM resolution
-- Ambient music playlist
+- Per scene music playlist
 - HTML Browser
 - Scene tree window
 - Creating, loading and saving scenes (editing walls and doors not yet
   supported)
 - Creating circular walls
-- Import images, tokens
-- Deleting tokens
+- Importing images, tokens, music
+- Deleting tokens, images, walls, doors, music
 - Editing token labels
 - DM fulll and view screenshots
 - HTML documentation browser with quick filter, table of contents and search
   result navigation inside and across documents
 - Grid drawing
-
+- Snap to grid
+- Clip line of sight to different light ranges (candles, torches, etc) 
 
 ### HTTP server
 - Visualize player's view with line of sight
@@ -73,6 +79,9 @@ https://user-images.githubusercontent.com/6446344/205395528-095dee66-6fb8-4a85-9
 
 ## Todo 
 ### Main app
+- Add sample scenes
+- Don't hard-code documentation/ abstract it out in rulesets/load documentation
+  menu
 - Import Universal VTT (Dungeondraft)
 - Import .mod/.pak (Fantasy grounds)
 - Invisible walls: the wall hides the tokens behind but without "fog" (eg to
@@ -82,9 +91,9 @@ https://user-images.githubusercontent.com/6446344/205395528-095dee66-6fb8-4a85-9
   videos from DungeonDraft or Fantasy Grounds Unity using eg XBOX game bar)
 - Use backfacing lines to project the fog, should give a more natural fog for trees, terrain, etc?
 - Export to Dungeon Scrawl for re-rendering (even re-render under the hood?) 
-- Music objects, area, ambient playlist, fading in / out, shuffle, ordered (see https://tabletopaudio.com/)
-- Hide/Show objects (secret doors, one way walls, secret areas, hidden tokens, 
-  fogged areas, etc)
+- Music objects, area, fading in / out, shuffle, ordered (see https://tabletopaudio.com/)
+- Hide/Show objects (secret doors, one way walls, secret areas, fogged areas,
+  etc)
 - Layers, groups, move objects closer/further
 - Light sources and illumination/fog of war/flickering/animated lights
 - Dimmed out of line of sight but previously visited places (background only,
@@ -135,6 +144,7 @@ https://user-images.githubusercontent.com/6446344/205395528-095dee66-6fb8-4a85-9
   may be insecure and incompatible with 3d view)
 - Animated maps by pulling the mp4/webm and drawing on top
 - Per-player player view
+- Send current music (data url or fetched from http server)
 - Character sheet sharing (per player)
 - Chat
 - Video
