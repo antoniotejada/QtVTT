@@ -61,6 +61,34 @@ setup_logger(logger)
 logger.setLevel(logging.WARNING)
 logger.setLevel(logging.INFO)
 
+class Struct:
+    """
+    A structure that can have any fields defined or added.
+
+        s = Struct(field0=value0, field1=Value1)
+        s.field2 = value2
+    
+    or
+
+        s = Struct(**{field0 : value0, field1=value1})
+    
+    """
+    def __init__(self, **entries): 
+        self.__dict__.update(entries)
+
+
+class JSONStructEncoder(json.JSONEncoder):
+    """
+    JSON Encoder for Structs
+    """
+    def default(self, obj):
+        if (isinstance(obj, Struct)):
+            return obj.__dict__
+
+        else:
+            return json.JSONEncoder.default(self, obj)
+
+
 def report_versions():
     logger.info("Python version: %s", sys.version)
 
@@ -199,13 +227,32 @@ def index_of(l, item):
     except ValueError:
         return -1
 
+def find_parent(ancestor, item):
+    logger.info("Looking for %s in %s", item, ancestor)
+    if (isinstance(ancestor, (list, tuple))):
+        for value in ancestor:
+            if (value is item):
+                return ancestor
+            l = find_parent(value, item)
+            if (l is not None):
+                return l
+
+    elif (hasattr(ancestor, "__dict__")):
+        for value in ancestor.__dict__.values():
+            if (value is item):
+                return ancestor
+            l = find_parent(value, item)
+            if (l is not None):
+                return l
+    
+    return None
+
 
 def qSizeToPointF(size):
     return QPointF(size.width(), size.height())
 
 def qSizeToPoint(size):
     return QPoint(size.width(), size.height())
-
 
 def qtuple(q):
     """
@@ -227,22 +274,6 @@ def qtuple(q):
     else:
         assert False, "Unhandled Qt type!!!"
 
-
-class Struct:
-    """
-    A structure that can have any fields defined or added.
-
-        s = Struct(field0=value0, field1=Value1)
-        s.field2 = value2
-    
-    or
-
-        s = Struct(**{field0 : value0, field1=value1})
-    
-    """
-    def __init__(self, **entries): 
-        self.__dict__.update(entries)
-    
 
 def import_ds(scene, filepath):
     # Load a dungeonscrawl .ds data file 
@@ -1360,6 +1391,10 @@ class GraphicsPixmapNotifyItem(QGraphicsPixmapItem):
                 self.setFocus()
                 result = True
 
+            elif (event.key() == Qt.Key_Return):
+                # Setting the focus to the parent causes focus out and accept
+                self.setFocus()
+
             else:
                 result = watched.sceneEvent(event)
 
@@ -1661,7 +1696,6 @@ class VTTGraphicsScene(QGraphicsScene):
         font = txtItem.font()
         font.setPointSize(txtItem.font().pointSize() *0.75)
         txtItem.setFont(font)
-        txtItem.setFlags(QGraphicsItem.ItemIsSelectable)
         # XXX This needs to hook on the item's focusOutEvent to unfocus and to
         #     recenter the label and to update the scene tree widget and the
         #     tooltip
@@ -2314,10 +2348,6 @@ class VTTGraphicsView(QGraphicsView):
             
     def eventFilter(self, source, event):
         logger.debug("%s %s", event.type(), source)
-        if ((event.type() == QEvent.GraphicsSceneMousePress) and isinstance(source, QGraphicsTextItem)):
-            logger.info("Ignoring mousepress")
-            return True
-
 
         return super(VTTGraphicsView, self).eventFilter(source, event)
 
@@ -2497,13 +2527,17 @@ class VTTMainWindow(QMainWindow):
             self.recentFileActs.append(
                     QAction(self, visible=False, triggered=self.openRecentFile))
 
+        
+        self.cutItemAct = QAction("Cut& Item", self, shortcut="ctrl+x", triggered=self.cutItem)
+        self.copyItemAct = QAction("&Copy Item", self, shortcut="ctrl+c", triggered=self.copyItem)
+        self.pasteItemAct = QAction("&Paste Item", self, shortcut="ctrl+v", triggered=self.pasteItem)
         self.deleteItemAct = QAction("&Delete Item", self, shortcut="del", triggered=self.deleteItem)
         self.importTokenAct = QAction("Import &Token...", self, shortcut="ctrl+t", triggered=self.importToken)
         self.importImageAct = QAction("Import &Image...", self, shortcut="ctrl+i", triggered=self.importImage)
         self.importMusicAct = QAction("Import &Music Track...", self, shortcut="ctrl+m", triggered=self.importMusic)
         self.clearWallsAct = QAction("Clear All &Walls...", self, triggered=self.clearWalls)
         self.clearDoorsAct = QAction("Clear All &Doors...", self, triggered=self.clearDoors)
-        self.copyScreenshotAct = QAction("DM &View &Screenshot", self, shortcut="ctrl+c", triggered=self.copyScreenshot)
+        self.copyScreenshotAct = QAction("DM &View &Screenshot", self, shortcut="ctrl+alt+c", triggered=self.copyScreenshot)
         self.copyFullScreenshotAct = QAction("DM &Full Screenshot", self, shortcut="ctrl+shift+c", triggered=self.copyFullScreenshot)
         self.lockFogCenterAct = QAction("&Lock Fog Center", self, shortcut="ctrl+l", triggered=self.lockFogCenter, checkable=True)
         self.nextTrackAct = QAction("N&ext Music Track", self, shortcut="ctrl+e", triggered=self.nextTrack)
@@ -2538,6 +2572,9 @@ class VTTMainWindow(QMainWindow):
         editMenu.addAction(self.importTokenAct)
         editMenu.addAction(self.importMusicAct)
         editMenu.addSeparator()
+        editMenu.addAction(self.cutItemAct)
+        editMenu.addAction(self.copyItemAct)
+        editMenu.addAction(self.pasteItemAct)
         editMenu.addAction(self.deleteItemAct)
         editMenu.addSeparator()
         editMenu.addAction(self.clearDoorsAct)
@@ -2846,27 +2883,36 @@ class VTTMainWindow(QMainWindow):
         # XXX Use something less heavy handed
         self.setScene(self.scene, self.campaign_filepath)
         
-    def deleteItem(self):
-        def findParent(s, item):
-            logger.info("Looking for %s in %s", item, s)
-            if (isinstance(s, (list, tuple))):
-                for value in s:
-                    if (value is item):
-                        return s
-                    l = findParent(value, item)
-                    if (l is not None):
-                        return l
+    def copyItem(self, cut=False):
+        gscene = self.gscene
+        if (self.graphicsView.hasFocus() and (len(gscene.selectedItems()) > 0)):
+            logger.info("Copying %d tokens", len(gscene.selectedItems()))
+            map_tokens = []
+            for item in gscene.selectedItems():
+                # XXX Copy JSON MIME?
+                map_token = item.data(0)
+                map_tokens.append(map_token)
+            js = json.dumps({ "tokens" :  map_tokens }, indent=2, cls=JSONStructEncoder)
+            logger.info("Copied to clipboard %s", js)
+            qApp.clipboard().setText(js)
 
-            elif (hasattr(s, "__dict__")):
-                for value in s.__dict__.values():
-                    if (value is item):
-                        return s
-                    l = findParent(value, item)
-                    if (l is not None):
-                        return l
+    def pasteItem(self):
+        # XXX Use mime and check the mime type instead of scanning the text
+        if (self.graphicsView.hasFocus() and ('"tokens":' in qApp.clipboard().text())):
+            map_tokens = json.loads(qApp.clipboard().text())["tokens"]
             
-            return None
+            logger.info("Pasting %d tokens", len(map_tokens))
+            # XXX This could offset the items so copy & paste don't fully
+            #     overlap?
+            # XXX This should select the pasted items?
+            self.scene.map_tokens.extend([Struct(**map_token) for map_token in map_tokens])
+            self.setScene(self.scene)
+    
+    def cutItem(self):
+        self.copyItem()
+        self.deleteItem()
 
+    def deleteItem(self):
         changed = False
         if (self.tree.hasFocus()):
             item = self.tree.currentItem()
@@ -2876,17 +2922,17 @@ class VTTMainWindow(QMainWindow):
             #     struct, would need to put an empty one instead (and probably
             #     ask for confirmation)
             data = item.data(0, Qt.UserRole)
-            l = findParent(self.scene, data)
+            l = find_parent(self.scene, data)
             if ((l is not None) and isinstance(l, (list, tuple))):
                 logger.info("Deleting item %s from list %s", item, l)
                 l.remove(data)
                 changed = True
                     
-        elif (self.graphicsView.hasFocus() and (self.gscene.focusItem() is not None)):
-            logger.info("Deleting graphicsitem %s", self.gscene.focusItem().data(0))
+        elif (self.graphicsView.hasFocus() and (len(self.gscene.selectedItems()) > 0)):
             # XXX This only expects tokens for the time being
-            # XXX This could delete all selected items
-            self.scene.map_tokens.remove(self.gscene.focusItem().data(0))
+            for item in self.gscene.selectedItems():
+                logger.info("Deleting graphicsitem %s", item.data(0))
+                self.scene.map_tokens.remove(item.data(0))
             changed = True
             
         if (changed):
@@ -3184,8 +3230,8 @@ class VTTMainWindow(QMainWindow):
         logger.info("saving %r", filepath)
         logger.debug("%r", [attr for attr in self.scene.__dict__])
 
-        # Use a set since eg token filepaths can be duplicated and want
-        # to save them only once
+        # Use a set since eg token filepaths can be duplicated and want to save
+        # them only once
         filepaths = set()
         pixmaps = dict()
         

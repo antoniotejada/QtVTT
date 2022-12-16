@@ -57,6 +57,7 @@ https://user-images.githubusercontent.com/6446344/205395528-095dee66-6fb8-4a85-9
 - Creating circular walls
 - Importing images, tokens, music
 - Deleting tokens, images, walls, doors, music
+- Cut, copy, and paste selected tokens
 - Editing token labels
 - DM fulll and view screenshots
 - HTML documentation browser with quick filter, table of contents and search
