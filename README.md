@@ -22,6 +22,10 @@ Virtual Table Top written in Python and Qt
 
 ![image](https://user-images.githubusercontent.com/6446344/207979570-083f0404-b36d-4d6a-b69e-4cd095d546f7.png)
 
+### Documentation browsing, combat tracker, encounter browser
+
+![image](https://user-images.githubusercontent.com/6446344/208770713-77b870b3-4588-45d0-a009-cec9ce1d8307.png)
+
 
 ## Video
 
@@ -33,6 +37,10 @@ https://user-images.githubusercontent.com/6446344/205396105-c2e846ed-1e78-4b48-b
 
 ### Multiple tokens, wall & door collisions, walking around opening doors
 https://user-images.githubusercontent.com/6446344/205395528-095dee66-6fb8-4a85-9f25-d4a1b818802d.mp4
+
+### Scene creation, token resizing, token labeling, circular walls, documentation browsing, encounter builder, combat tracker
+
+https://user-images.githubusercontent.com/6446344/208662246-48a0f31f-b2f3-45e3-915e-3004dea4d36d.mp4
 
 ## Features
 
@@ -65,6 +73,10 @@ https://user-images.githubusercontent.com/6446344/205395528-095dee66-6fb8-4a85-9
 - Grid drawing
 - Snap to grid
 - Clip line of sight to different light ranges (candles, torches, etc) 
+- AD&D2E Encounter Builder with difficulty rating and importing into the current
+  scene, filter monsters and add them as tokens to the current scene.
+- AD&D2E Combat tracker for rolling initiative, hit points, attacks, damages for
+  the tokens in the current scene.
 
 ### HTTP server
 - Visualize player's view with line of sight
@@ -106,18 +118,18 @@ https://user-images.githubusercontent.com/6446344/205395528-095dee66-6fb8-4a85-9
 - Wall, door, token, image, drawing, fog zone, creation/deletion
 - Permanent drawing (spell areas, fire splash, game-clock timer areas, grids, etc)
 - Measurement tools (cone, circle, line, square)
-- Token states/stats/heading (name, size, hit points, life level, stunned, game-clock timers, initiative order, current/next in combat, etc)
+- Token states/stats/heading (name, size, hit points, life level, stunned,
+  game-clock timers, initiative order, current/next in combat, etc)
 - Campaign/scenes management
 - Copy paste of any object
-- Text editor with markdown editing with cross links/embedded tools (scenes, random tables, monsters, etc)
+- Text editor with markdown editing with cross links/embedded tools (scenes,
+  random tables, monsters, etc)
 - Undo/redo
 - Record playing/combat history
 - Dice rolling
-- Token designer (import any image, rotate, scale, tint, circle cut and draw ring)
-- AD&D2E Encounter builder (calculate hit points, treasure, tokens, drop on scene)
-- AD&D2E Monster browser
+- Token designer (import any image, rotate, scale, tint, circle cut and draw
+  ring)
 - AD&D2E spell browser
-- AD&D2E Combat tracker (initiative, hit points, round counting for game-clock timer effects, etc)
 - AD&D2E Treasure generator
 - AD&D2E Nested random tables
 - AD&D2E character sheets
