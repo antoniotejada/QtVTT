@@ -30,26 +30,41 @@ from PyQt5.QtMultimedia import *
 
 
 class LineHandler(logging.StreamHandler):
+    """
+    Split lines in multiple records, fill in %(className)s
+    """
     def __init__(self):
         super(LineHandler, self).__init__()
 
     def emit(self, record):
+        # Find out class name, _getframe is supposed to be faster than inspect,
+        # but less portable
+        # caller_locals = inspect.stack()[6][0].f_locals
+        caller_locals = sys._getframe(6).f_locals
+        clsname = ""
+        zelf = caller_locals.get("self", None)
+        if (zelf is not None):
+            clsname = class_name(zelf) + "."
+            zelf = None
+        caller_locals = None
+        
+        # Indent all lines but the first one
+        indent = ""
         text = record.getMessage()
         messages = text.split('\n')
-        indent = ""
         for message in messages:
             r = record
             r.msg = "%s%s" % (indent, message)
+            r.className = clsname
             r.args = None
             super(LineHandler, self).emit(r)
             indent = "    " 
-
 
 def setup_logger(logger):
     """
     Setup the logger with a line break handler
     """
-    logging_format = "%(asctime).23s %(levelname)s:%(filename)s(%(lineno)d):[%(thread)d] %(funcName)s: %(message)s"
+    logging_format = "%(asctime).23s %(levelname)s:%(filename)s(%(lineno)d):[%(thread)d] %(className)s%(funcName)s: %(message)s"
 
     logger_handler = LineHandler()
     logger_handler.setFormatter(logging.Formatter(logging_format))
@@ -215,7 +230,7 @@ def os_path_abspath(path):
     if ((not abspath.endswith(os.sep)) and os_path_isroot(abspath)):
         abspath += os.sep
 
-    logger.info("os_path_abspath %r is %r", path, abspath)
+    logger.info("%r is %r", path, abspath)
     return abspath
 
 
@@ -249,6 +264,8 @@ def find_parent(ancestor, item):
     
     return None
 
+def class_name(o):
+    return o.__class__.__name__
 
 def qSizeToPointF(size):
     return QPointF(size.width(), size.height())
@@ -276,6 +293,32 @@ def qtuple(q):
     else:
         assert False, "Unhandled Qt type!!!"
 
+eventTypeToName = { getattr(QEvent, name) : name for name in vars(QEvent) if type(getattr(QEvent, name)) == QEvent.Type}
+def qEventTypeToString(eventType):
+
+    return eventTypeToName.get(eventType, str(eventType))
+
+def qFindTabBarFromDockWidget(dock):
+    logger.info("%s", dock.windowTitle())
+    # QDockWidget tabs are QTabBars children of the main window, in C++ the dock
+    # can be found by checking that the QDockWidget address matches
+    # tab.tabData(), unfortunately there doesn't seem to be a way to get the C++
+    # QDockWidget pointer from the Python QDockWidget wrapper. Instead, this
+    # checks the tabData bounds vs. the dock bounds plus some slack to find the
+    # tab that geometrically matches the dock.
+    #
+    # See https://bugreports.qt.io/browse/QTBUG-40913 See
+    # https://www.qtcentre.org/threads/61471-(pyqt)-Identify-QDockWidget-by-QTabBar-created-automatically-by-QMainWindow-in-PyQT
+    for tabBar in dock.parent().findChildren(QTabBar):
+        if ((tabBar.geometry().x() == dock.geometry().x()) and 
+            (tabBar.geometry().width() == dock.geometry().width()) and
+            # This is actually 2, use a bit of slack
+            ((tabBar.geometry().y() - dock.geometry().bottom()) < 10)
+            ):
+            return tabBar
+
+    return None
+
 class NumericTableWidgetItem(QTableWidgetItem):
     """
     See https://stackoverflow.com/questions/25533140/sorting-qtablewidget-items-numerically
@@ -293,6 +336,24 @@ class NumericTableWidgetItem(QTableWidgetItem):
             return selfDataValue < otherDataValue
         else:
             return super(NumericTableWidgetItem, self).__lt__(self, other)
+
+class LinkTableWidgetItem(QTableWidgetItem):
+    def __init__(self, value = "", link = None):
+        super(LinkTableWidgetItem, self).__init__("%s" % value)
+        self.setLink(link)
+
+    def link(self):
+        return self.link
+
+    def setLink(self, link = None):
+        self.link = link
+        if (link is not None):
+            font = self.font()
+            font.setUnderline(True)
+            self.setFont(font)
+            # XXX This should get it from some global palette?
+            self.setForeground(QBrush(Qt.blue))
+        # XXX Restore font & foreground if link is None?
 
 def import_ds(scene, filepath):
     # Load a dungeonscrawl .ds data file 
@@ -545,7 +606,7 @@ def load_ds(ds_filepath, map_filepath=None, img_offset_in_cells=None):
             })
         ]
 
-    # Create some dummy tokens for the time being    
+    # Create some dummy tokens for the time being
     # XXX Remove once tokens can be imported or dragged from the token browser
     scene.map_tokens = []
     for filename in [
@@ -643,7 +704,7 @@ def eval_dice(s):
         """
         # Consume whitespace
         while ((state.string_index < len(state.string)) and 
-               (state.string[state.string_index] in "\t \n\r")):
+               state.string[state.string_index].isspace()):
             state.string_index += 1
 
         state.token = Struct()
@@ -656,12 +717,14 @@ def eval_dice(s):
                 state.string_index += 1
 
             else:
+                # NdM expression eg 1d10, 5d6, etc
                 m = re.match(r"(\d+)d(\d+)", state.string[state.string_index:])
                 if (m is not None):
                     state.token.type = "die"
                     state.token.value = int(m.group(1)) * random.randint(1, int(m.group(2)))
                     
                 else:
+                    # Number
                     m = re.match(r"(\d+)", state.string[state.string_index:])
                     state.token.type = "number"
                     state.token.value = int(m.group(1))
@@ -782,19 +845,169 @@ def qPopulateTable(table, rows):
     table.setSortingEnabled(True)
 
 
+class VTTTableWidget(QTableWidget):
+    """
+    Options for supporting links on cells:
+
+    Needs to support:
+      - mouse cursor change to hand
+      - edit on double click, other cell navigation (tab navigates/edits next
+        cell, up/down navigates up/down, esc aborts edit)
+      - navigation on single click
+      - navigation on tab+enter
+      - sorting
+
+    setCellWidget QLabel with HTML contents:
+      - easy, just works for readonly
+      - switches to hand icon
+      - keyboard navigation
+      - not editable, but if you set Qt.TextEditorInteraction then you can edit,
+        would need tweaking to edit only on double click, etc
+      - sorting doesn't work (probably sorts by html link, could be fixed with Qt.InitialSortRole?)
+      - focused text color doesn't change to white
+
+    setCellWidget QLabel + itemdelegate
+      - No need to calculate text extents for hand cursor
+      - No need
+      - Very messy, needs two unrelated objects
+
+    setBrush+font underline + viewport mouse hover eventFilter + table
+    eventfilter
+      - created items need to set the color and underline on the item
+      - viewport eventfilter for mouse hover and click
+      - table eventfilter for keyboard
+      - simple and sorting just works
+      - not very encapsulated unless the table is subclassed?
+
+    setCellWidget QLabel + lineedit
+      - Needs to mimic all keys from itemdelegate (tab, up arrow, etc)
+
+    column Itemdelegate + editorEvent
+      - editorEvent captures the click and the mousemovement/cursor change ok
+      - In addition to the delegate, needs to set the underline and font color
+        on ItemDelegate::paint or at item creation
+      - not very clean, the itemdelegate is global but needs to keep checking at
+        paint time whether the item 
+      - editorevent doesn't capture keystrokes when not in editing mode, can't
+        open urls with keyboard unless eventFilter/etc is set too
+
+    QTableWidgetItem subclass
+      - Doesn't seem like it does much, there's no hook for when the item is
+        added to the table
+
+    QTExtEdit with HTML contents
+      - can't easily trap link clicking?
+      - doesn't switch to hand icon?
+
+    XXX Use an item delegate and editorEvent instead of this complicated
+    delegate + label See
+    https://forum.qt.io/topic/23808/solved-qstyleditemdelegate-custom-mouse-cursor-for-tablewidget-item/3
+
+    """
+    linkActivated = pyqtSignal(str)
+    def __init__(self, parent=None):
+        logger.info("")
+        super(VTTTableWidget, self).__init__(parent)
+        
+        # Cells with links require trapping mouse hovering and clicking on them,
+        # and pressing return/ctrl+return on cells
+        self.viewport().installEventFilter(self)
+        self.setMouseTracking(True)
+        self.installEventFilter(self)
+
+    def itemLink(self, item):
+        logger.info("%s", None if item is None else item.text())
+        link = None if item is None else getattr(item, "link", None)
+        return link
+
+    def eventFilter(self, source, event):
+        # This can also be done with the individual event handlers, but using
+        # eventFilter allows a unique codepath and probably simpler (the
+        # individual event handler won't trap eg viewport events)
+        logger.info("source %s type %s", class_name(source), qEventTypeToString(event.type()))
+        table = self
+        if (
+            ((source == table.viewport()) and 
+             (event.type() in [QEvent.Leave, QEvent.MouseMove, QEvent.MouseButtonPress])) or
+             # Don't trap keys when the table doesn't have the focus (eg when
+             # the cell editor is open)
+            ((source == table) and (event.type() == QEvent.KeyPress) and 
+             (event.key() == Qt.Key_Return) and (table.hasFocus()))
+        ):
+            if (event.type() == QEvent.Leave):
+                table.unsetCursor()
+            
+            elif (event.type() == QEvent.KeyPress):
+                item = table.currentItem()
+                
+                link = self.itemLink(item)
+                if (link is not None):
+                    self.linkActivated.emit(link)
+                    return True 
+
+            elif (event.type() in [QEvent.MouseMove, QEvent.MouseButtonPress, QEvent.KeyPress]):
+                item = table.itemAt(event.pos())
+                link = self.itemLink(item)
+                if (link is not None):
+                    cellRect = QRectF(
+                        table.columnViewportPosition(item.column()), 
+                        table.rowViewportPosition(item.row()), 
+                        table.columnWidth(item.column()), 
+                        table.rowHeight(item.row())
+                    )
+
+                    # The item's font size is 7.8, the table's is 9.0 but
+                    # visually the item is being rendered with 9.0, so use the
+                    # table's for the font metrics rather than the item's
+
+                    # XXX Another way of fixing this is to re-set the table's
+                    #     font point size to the same table's font point size
+                    #     value (!), which will make the item then render at 7.8
+                    #     (!)
+                    fm = QFontMetricsF(item.font())
+                    fm = QFontMetricsF(table.font())
+                    logger.info("item size %f table size %f", item.font().pointSizeF(), table.font().pointSizeF())
+
+                    # XXX Get alignments from somewhere
+                    flags= Qt.AlignLeft | Qt.AlignVCenter
+
+                    rect = fm.boundingRect(cellRect, flags, item.text())
+                    logger.info("Item %s pos %s rect %s", item.text(), qtuple(event.pos()), qtuple(rect))
+                    if (rect.contains(event.pos())):
+                        table.setCursor(Qt.PointingHandCursor)
+                        logger.info("inside")
+                        if (event.type() == QEvent.MouseButtonPress):
+                            token = item.data(Qt.UserRole)
+                            # Ignore this click, especially if ctrl is pressed
+                            # for "open in new browser", don't want to select
+                            # the clicked cell
+                            self.linkActivated.emit(self.itemLink(item))
+                            return True
+
+                    else:
+                        table.unsetCursor()
+
+        return super(VTTTableWidget, self).eventFilter(source, event)
+    
 class CombatTracker(QWidget):
     sceneChanged = pyqtSignal()
+    browseMonster = pyqtSignal(str)
 
     def __init__(self, parent=None):
         super(CombatTracker, self).__init__(parent)
 
-        headers = ["Name", "PC", "I", "I+", "Rolls", "HD", "HP", "HP_", "AC", "MR", "T0", "#AT", "Damage", "Alignment", "Notes"]
+        self.updatesBlocked = False
+
+        headers = [
+            "Name", "PC", "I", "I+", "A(D)", "A+", "HD", "HP", "HP_", "AC", 
+            "MR", "T0", "#AT", "Damage", "Alignment", "Notes"
+        ]
         self.numericHeaders = set(["I", "HD", "HP", "HP_", "AC", "T0", "#AT"])
         self.headerToColumn = dict()
         for i, header in enumerate(headers):
             self.headerToColumn[header] = i
         
-        table = QTableWidget()
+        table = VTTTableWidget()
         self.table = table
         table.setColumnCount(len(headers))
         for i, header in enumerate(headers):
@@ -802,9 +1015,10 @@ class CombatTracker(QWidget):
             table.setHorizontalHeaderItem(i, item)
         table.setSortingEnabled(True)
         table.cellChanged.connect(self.cellChanged)
+        table.linkActivated.connect(self.browseMonster.emit)
         # Don't focus just on mouse wheel
         table.setFocusPolicy(Qt.StrongFocus)
-            
+    
         vbox = QVBoxLayout()
         vbox.setContentsMargins(0, 0, 0, 0)
         vbox.addWidget(table)
@@ -832,9 +1046,39 @@ class CombatTracker(QWidget):
         vbox.addLayout(hbox)
         self.setLayout(vbox)
 
+    def setUpdatesBlocked(self, blocked):
+        """
+        Emit a sceneChanged if updates are not blocked, this is done inside a
+        blockSignals/unblockSignals bracket to prevent infinite updates when
+        cellChanged triggers a sceneChanged which triggers a setSecene and
+        setScene calls updateCombatTrackers which programmatically changes the
+        cell and causes a cellChanged again.
+
+        This is used in two cases:
+        - prevent per cell update when modifying cells in a loop, in this case
+          it's called with setUpdatesBlocked(True) at the beginning and
+          setUpdatesBlocked(False) at the end which emits the sceneChanged to
+          perform a scene update once all changes in the loop have been done
+        - emit a sceneChanged bracketed by block/unblockSignals. In this case
+          it's called with False when update is already False, in order to keep
+          a single sceneChanged emit codepath.
+
+          XXX Probably the second case could be removed once there's piecemeal
+              scene updates?
+        """
+        self.updatesBlocked = blocked
+        if (not self.updatesBlocked):
+            self.table.blockSignals(True)
+            self.sceneChanged.emit()
+            self.table.blockSignals(False)
+
     def rollAttack(self):
         logger.info("")
         table = self.table
+
+        # XXX Each cell modification causes a scene update, block updates and
+        #     unblock at the end. Remove once scene updates are piecewise
+        self.setUpdatesBlocked(True)
 
         # Disable sorting otherwise items will sort themselves mid-insertion
         # interfering with insertion
@@ -843,6 +1087,8 @@ class CombatTracker(QWidget):
         for j in xrange(table.rowCount()):
             # Only roll for rows without PC checked
             if (table.item(j, self.headerToColumn["PC"]).text() == ""):
+                attackAdj = table.item(j, self.headerToColumn["A+"]).text()
+                attackAdj = eval_dice(attackAdj)
                 # - multiple damages are separated by / 
                 # - individual damage is in the format die expression (eg 2d4 + 1) 
                 #   or min-max (eg 3-9)
@@ -851,29 +1097,39 @@ class CombatTracker(QWidget):
                 rolls = []
                 for damage in damages:
                     # Roll attack for this damage
-                    attack = eval_dice("1d20")
+                    attack = eval_dice("1d20") + attackAdj
                     roll = -1
+                    # Check minmax format
                     m = re.search(r"(\d+)-(\d+)", damage)
                     if (m is not None):
                         logger.info("Rolling rand %s to %s", m.group(1), m.group(2))
                         roll = random.randint(int(m.group(1)), int(m.group(2)))
+
                     else:
+                        # Check die expression
                         try:
                             roll = eval_dice(damage)
                             logger.info("Rolling die %s", damage)
+
                         except:
                             pass
 
                     rolls.append("%d (%d)" % (attack, roll))
 
                 cell = str.join(",", rolls)
-                table.item(j, self.headerToColumn["Rolls"]).setText(cell)
+                table.item(j, self.headerToColumn["A(D)"]).setText(cell)
 
         table.setSortingEnabled(True)
+
+        self.setUpdatesBlocked(False)
 
     def rollInitiative(self):
         logger.info("")
         table = self.table
+
+        # XXX Each cell modification causes a scene update, block updates and
+        #     unblock at the end. Remove once scene updates are piecewise
+        self.setUpdatesBlocked(True)
 
         # Disable sorting otherwise items will sort themselves mid-insertion
         # interfering with insertion
@@ -890,13 +1146,21 @@ class CombatTracker(QWidget):
                 cell = "%d" % initiative
                 
                 table.item(j, self.headerToColumn["I"]).setText(cell)
+        
         # XXX Display the initiative roll or the order on the tokens
+        # XXX See https://game-icons.net/ for status icons
+
+        self.setUpdatesBlocked(False)
 
         table.setSortingEnabled(True)
     
     def rollHitPoints(self):
         logger.info("")
         table = self.table
+
+        # XXX Each cell modification causes a scene update, block updates and
+        #     unblock at the end. Remove once scene updates are piecewise
+        self.setUpdatesBlocked(True)
 
         # Disable sorting otherwise items will sort themselves mid-insertion
         # interfering with insertion
@@ -920,6 +1184,8 @@ class CombatTracker(QWidget):
 
         table.setSortingEnabled(True)
 
+        self.setUpdatesBlocked(False)
+
     def cellChanged(self, row, col):
         logger.debug("row %d col %d item %s", row, col, self.table.item(row, col).text())
         table = self.table
@@ -930,10 +1196,10 @@ class CombatTracker(QWidget):
             return
         text = table.item(row, col).text()
         header = table.horizontalHeaderItem(col).text()
+        
         if (header == "Name"):
             token.name = text
-            self.sceneChanged.emit()
-
+            
         else:
             if (getattr(token, "ruleset_info", None) is None):
                 token.ruleset_info = Struct(**default_ruleset_info)
@@ -944,6 +1210,9 @@ class CombatTracker(QWidget):
 
             elif (header == "#AT"):
                 ruleset_info.AT = text
+
+            elif (header == "A+"):
+                ruleset_info.A_ = text
 
             elif (header == "HP"):
                 ruleset_info.HP = text
@@ -968,12 +1237,19 @@ class CombatTracker(QWidget):
 
             elif (header == "Notes"):
                 ruleset_info.Notes = text
-            
-            self.sceneChanged.emit()
+
+        if (not self.updatesBlocked):
+            # Re set updates so the update is performed in a single codepath
+            self.setUpdatesBlocked(False)
 
     def setScene(self, scene):
         logger.debug("scene %s", scene)
         table = self.table
+
+        # XXX The combat tracker should contain only selected tokens unless in
+        #     some "all scene tokens" or "only view tokens" mode, which would
+        #     allow having multiple combat trackers eg per room in the same
+        #     scene
 
         # Disable sorting otherwise items will sort themselves mid-insertion
         # interfering with insertion
@@ -1023,7 +1299,10 @@ class CombatTracker(QWidget):
                     logger.debug("setting item %d, %d", row, i)
                     if (header in self.numericHeaders):
                         item = NumericTableWidgetItem()
-                    
+
+                    elif (header == "Name"):
+                        item = LinkTableWidgetItem()
+
                     else:
                         item = QTableWidgetItem()
                     # Note this triggers a cellChanged event, but there's no
@@ -1035,6 +1314,8 @@ class CombatTracker(QWidget):
 
                 if (header in d):
                     cell = d[header]
+                    if (i == self.headerToColumn["Name"]):
+                        item.setLink(token.ruleset_info.Id)
 
                 else:
                     cell = item.text()
@@ -1053,6 +1334,7 @@ class CombatTracker(QWidget):
 
 
 class EncounterBuilder(QWidget):
+    browseMonster = pyqtSignal(str)
     def __init__(self, parent=None):
         super(EncounterBuilder, self).__init__(parent)
 
@@ -1067,14 +1349,13 @@ class EncounterBuilder(QWidget):
         hbox.addWidget(lineEdit)
         hbox.setStretchFactor(label, 0)
 
-        table = QTableWidget()
+        table = VTTTableWidget()
         self.monsterTable = table
         self.encounterTable = None
 
         filepath = os.path.join("_out", "SBLaxman's AD&D Monster List 2.1.csv")
         filepath = os.path.join("_out", "monsters2.csv")
         
-        # XXX Missing setting links to the browser
         with open(filepath, "rb") as f:
             rows = list(csv.reader(f, delimiter="\t"))
             headers = rows[0]
@@ -1083,11 +1364,22 @@ class EncounterBuilder(QWidget):
         self.monsterHeaderToColumn = dict()
         for i, header in enumerate(headers):
             self.monsterHeaderToColumn[header] = i
-            
+        # Set links to monster browser
+        for row in xrange(table.rowCount()):
+            item = table.item(row, self.monsterHeaderToColumn["Name"])
+            table.setItem(item.row(), item.column(), LinkTableWidgetItem(
+                item.text(), 
+                table.item(row, self.monsterHeaderToColumn["Link"]).text()))
+        table.setColumnHidden(self.monsterHeaderToColumn["Link"], True)
+        # XXX This doesn't allow keyboard browseMonster because the table is
+        #     readonly and return is used for transferring the monster to the
+        #     encounter
+        table.linkActivated.connect(self.browseMonster.emit)
         table.installEventFilter(self)
         table.resizeColumnsToContents()
         table.resizeRowsToContents()
         table.setSelectionBehavior(QTableWidget.SelectRows)
+        table.setSelectionMode(QTableWidget.SingleSelection)
         table.setTabKeyNavigation(False)
         table.setEditTriggers(QAbstractItemView.NoEditTriggers)
         table.setSortingEnabled(True)
@@ -1109,18 +1401,23 @@ class EncounterBuilder(QWidget):
         widget.setLayout(vbox)
         vsplitter.addWidget(widget)
 
-        encounterHeaders = ["Id", "Filepath", "Name", "XP", "HD", "HDB", "HDD", "HP", "HP_", "AC", "MR", "T0", "#AT", "Damage", "Alignment", "Notes"]
-        hiddenEncounterHeaders = set(["HDB", "HDD", "Id", "Filepath"])
+        encounterHeaders = [
+            "Id", "Link", "Name", "XP", "HD", "HDB", "HDD", "HP", "HP_", "AC", 
+            "MR", "T0", "#AT", "Damage", "Alignment", "Notes"
+        ]
+        hiddenEncounterHeaders = set(["HDB", "HDD", "Id", "Link"])
         self.encounterHeaderToColumn = dict()
         for i, header in enumerate(encounterHeaders):
             self.encounterHeaderToColumn[header] = i
 
-        table = QTableWidget()
+        table = VTTTableWidget()
         self.encounterTable = table
         table.installEventFilter(self)
         table.setRowCount(0)
         table.setColumnCount(len(encounterHeaders))
+        table.setSelectionMode(QTableWidget.SingleSelection)
         table.setSortingEnabled(True)
+        table.linkActivated.connect(self.browseMonster.emit)
         # Don't focus just on mouse wheel
         table.setFocusPolicy(Qt.StrongFocus)
         
@@ -1148,7 +1445,9 @@ class EncounterBuilder(QWidget):
         button = QPushButton("Clear")
         button.clicked.connect(lambda : self.encounterTable.setRowCount(0))
         hbox.addWidget(button)
-        button = QPushButton("Add Tokens")
+        # XXX Need to disable this button when there are no rows in the
+        #     encounter table
+        button = QPushButton("Add To Scene")
         self.addTokensButton = button
         hbox.addWidget(button)
         
@@ -1188,8 +1487,8 @@ class EncounterBuilder(QWidget):
         for i in xrange(table.columnCount()):
             header = table.horizontalHeaderItem(i).text()
             iMonster = self.monsterHeaderToColumn.get(header, None)
-            # Some columns in the encounter don't have a monster
-            # counterpart, ignore
+            # Some columns in the encounter don't have a monster counterpart,
+            # ignore
             cell = ""
             if (iMonster is not None):
                 cell = self.monsterTable.item(row, iMonster).text()
@@ -1207,8 +1506,12 @@ class EncounterBuilder(QWidget):
             elif (i == self.encounterHeaderToColumn["Id"]):
                 cell = self.monsterTable.item(row, self.monsterHeaderToColumn["Name"]).text()
                 
-            item = QTableWidgetItem(cell)
             # Add at the end of the encounter table
+            if (i == self.encounterHeaderToColumn["Name"]):
+                link = self.monsterTable.item(row, self.monsterHeaderToColumn["Link"]).text()
+                item = LinkTableWidgetItem(cell, link)
+            else:
+                item = QTableWidgetItem(cell)
             table.setItem(nRow, i, item)
 
         table.setCurrentItem(item)
@@ -1258,11 +1561,13 @@ class EncounterBuilder(QWidget):
 
 
     def eventFilter(self, source, event):
-        logger.debug("source %s type %s", source, event.type())
-        logger.debug("%s %s", source == self.encounterTable, event.type() == QEvent.KeyPress)
-        if ((source == self.encounterTable) and (event.type() == QEvent.ShortcutOverride)):
+        logger.debug("source %s type %s", class_name(source), qEventTypeToString(event.type()))
+        if ((source == self.encounterTable) and (event.type() == QEvent.ShortcutOverride) and
+            (event.key() == Qt.Key_Delete)):
             logger.info("%d", event.key())
-            # XXX This is for trapping "del" key global shortcut, fix and remove
+            # XXX Ignore the global "del" key shortcut so cells can be edited,
+            #     fix in some other way (per dockwidget actions?) and remove, 
+            #     see Qt.ShortcutContext
             event.accept()
             return True
 
@@ -1279,7 +1584,7 @@ class EncounterBuilder(QWidget):
 
             self.addMonsterToEncounter(self.monsterTable.currentItem().row())
             return True
-    
+
         return False
 
     def filterItems(self, filter):
@@ -1287,16 +1592,12 @@ class EncounterBuilder(QWidget):
             filter = filter.lower()
             words = filter.split()
         for j in xrange(self.monsterTable.rowCount()):
-            #if (self.table.item(j-1, self.table.columnCount()-2).text() != "TSR 2140 - Monstrous Manual (Second Edition)"):
-            #    self.table.hideRow(j-1)
-            #    continue
-
             if (filter is None):
                 self.monsterTable.showRow(j)
             
             else:
                 for i in xrange(self.monsterTable.columnCount()):
-                    item = self.monsterTable.item(j,i)
+                    item = self.monsterTable.item(j, i)
                     if (all([word in item.text().lower() for word in words])):
                         self.monsterTable.showRow(j)
                         break
@@ -1351,6 +1652,7 @@ class DocBrowser(QWidget):
             self.index = index
 
         lineEdit = QLineEdit(self)
+        lineEdit.setPlaceholderText("Search...")
         listWidget = QListWidget()
         tocTree = QTreeWidget()
         tocTree.setColumnCount(1)
@@ -1469,6 +1771,9 @@ class DocBrowser(QWidget):
         url = QUrl.fromLocalFile(filepath)
         # Update the title before setting the source so it's ready for
         # sourceChanged handlers to fetch it
+        # XXX This is broken when filepath came from navigating via links as 
+        #     opposed to filtering, /C:/Users/ ... is stored instead of ../../jscript ...
+        #     fix in getSourcePath
         self.sourceTitle = self.index.filepath_to_title[os.path.relpath(filepath, self.docDirpath).lower()]
         self.textEdit.setSource(url)
 
@@ -1586,6 +1891,7 @@ class DocBrowser(QWidget):
 
         items = sorted(items)
 
+        # Remove all rows
         self.listWidget.clear()
         if (len(items) == 0):
             # Empty results, reload the current document so marks are cleared
@@ -1896,6 +2202,8 @@ class ImageWidget(QScrollArea):
         implement scrollbar event handling and do viewport-only zooming?
     """
     def __init__(self, parent=None):
+        logger.info("")
+
         super(ImageWidget, self).__init__(parent)
 
         self.scale = 1.0
@@ -2023,7 +2331,7 @@ class ImageWidget(QScrollArea):
             return super(ImageWidget, self).mouseMoveEvent(event)
 
     def eventFilter(self, source, event):
-        logger.debug("ImageWidget eventFilter %s %s", source, event.type())
+        logger.debug("source %s type %s", class_name(source), qEventTypeToString(event.type()))
         # Even if the filter was installed on the viewport, it will receive
         # messages from scrollbars and the label, discard those
         if ((event.type() == QEvent.Wheel) and (source == self.viewport())):
@@ -2095,7 +2403,7 @@ class GraphicsPixmapNotifyItem(QGraphicsPixmapItem):
     def sceneEventFilter(self, watched, event):
         # The main token item receives events from the label item in order to
         # detect when label editing ends
-        logger.debug("%s type %d", watched, event.type())
+        logger.debug("watched %s type %s", class_name(watched), qEventTypeToString(event.type()))
 
         # XXX Would like to focus on enter or double click and ignore single
         #     click, but events received here are the synthetic
@@ -2274,6 +2582,11 @@ class VTTGraphicsScene(QGraphicsScene):
             self.fogCenter = focusItem.pos()
         
         return self.fogCenter
+
+    def setFogCenter(self, fogCenter):
+        # This only makes sense if the center is locked, since otherwise will be
+        # overwritten as soon as the focusitem is moved
+        self.fogCenter = fogCenter
 
     def setFogCenterLocked(self, locked):
         self.fogCenterLocked = locked
@@ -2576,6 +2889,8 @@ class VTTGraphicsScene(QGraphicsScene):
             fogBrush = QBrush(QColor(196, 196, 196))
             fogPen = QPen(QColor(196, 196, 196))
         
+        # XXX Use gscene.blockSignals to prevent infinite looping 
+        #     and/or updateEnabled(False) to optimize redraws
         if ((gscene.dirtyCount != gscene.fogPolysDirtyCount) or force):
             gscene.fogPolysDirtyCount = gscene.dirtyCount
             
@@ -2776,6 +3091,7 @@ def compute_fog(scene, fog_center, light_range, bounds):
 default_ruleset_info = {
     "Alignment": "", 
     "AC": "7", 
+    "A_" : "0",
     "HP_": "", 
     "HP": "7", 
     "Damage": "By weapon", 
@@ -3092,7 +3408,8 @@ class VTTGraphicsView(QGraphicsView):
                 # No need to sort these, they get sorted below
                 d = { 
                     "None" : 0.0, "candle" : 5.0, "torch" : 15.0, 
-                    "light spell" : 20.0, "lantern" : 30.0, "campfire" : 35.0 
+                    "light spell" : 20.0, "lantern" : 30.0, "campfire" : 35.0,
+                    "infravision" : 60.0,
                 }
                 # XXX Assumes 5ft per cell, lightRange uses scene units
                 sortedValues = [i * gscene.getCellDiameter() / 5.0 for i in sorted(d.values())]
@@ -3122,7 +3439,7 @@ class VTTGraphicsView(QGraphicsView):
 
             
     def eventFilter(self, source, event):
-        logger.debug("%s %s", event.type(), source)
+        logger.debug("source %s type %s", class_name(source), qEventTypeToString(event.type()))
 
         return super(VTTGraphicsView, self).eventFilter(source, event)
 
@@ -3211,21 +3528,6 @@ class VTTMainWindow(QMainWindow):
         if (len(self.recent_filepaths) > 0):
             self.setRecentFile(self.recent_filepaths[0])
             
-        # Set the scene, which will update graphicsview, tree, imagewidget
-        if (len(sys.argv) == 1):
-            filepath = settings.value("recentFilepath0")
-            if (filepath):
-                logger.info("Restoring last campaign %r", filepath)
-                self.loadScene(filepath)
-                
-            else:
-                scene = load_test_scene()
-                self.setScene(scene)
-                
-        else:
-            self.loadScene(sys.argv[1])
-            self.setRecentFile(sys.argv[1])
-
         # Create all docks so geometry can be restored below
         # XXX There should be a better way of iterating through all keys?
         browser_keys = []
@@ -3274,6 +3576,24 @@ class VTTMainWindow(QMainWindow):
         for browser, key in browser_keys:
             data = settings.value("%s/state" % key)
             browser.restoreState(data)
+
+        # Once all the elements have been created, set the scene which will
+        # update all necessary windows (graphicsview, tree, imagewidget,
+        # tracker, builder...)
+        if (len(sys.argv) == 1):
+            filepath = settings.value("recentFilepath0")
+            if (filepath):
+                logger.info("Restoring last campaign %r", filepath)
+                self.loadScene(filepath)
+                
+            else:
+                scene = load_test_scene()
+                self.setScene(scene)
+                
+        else:
+            self.loadScene(sys.argv[1])
+            self.setRecentFile(sys.argv[1])
+
             
     def createMusicPlayer(self):
         self.player = QMediaPlayer()
@@ -3338,7 +3658,8 @@ class VTTMainWindow(QMainWindow):
         self.nextTrackAct = QAction("N&ext Music Track", self, shortcut="ctrl+e", triggered=self.nextTrack)
         self.rewindTrackAct = QAction("Rewind Music Track", self, shortcut="ctrl+left", triggered=self.rewindTrack)
         self.forwardTrackAct = QAction("Forward Music Track", self, shortcut="ctrl+right", triggered=self.forwardTrack)
-        self.closeWindowAct = QAction("&Close Window", self, shortcut=QKeySequence.Close, triggered=self.closeWindow)
+        self.closeWindowAct = QAction("&Close Window", self, triggered=self.closeWindow)
+        self.closeWindowAct.setShortcuts(["ctrl+f4", "ctrl+w"])
         self.prevWindowAct = QAction("&Prev Window", self, shortcut="ctrl+shift+tab", triggered=self.prevWindow)
         self.nextWindowAct = QAction("&Next Window", self, shortcut="ctrl+tab", triggered=self.nextWindow)
         
@@ -3443,6 +3764,8 @@ class VTTMainWindow(QMainWindow):
                 "<li> line of sight"
                 "<li> remote viewing via http"
                 "<li> <a href=\"https://app.dungeonscrawl.com/\">Dungeon Scrawl</a> import"
+                "<li> combat tracker"
+                "<li> encounter builder"
                 "<li> and more"
                 "</ul>"
                 "Visit the <a href=\"https://github.com/antoniotejada/QtVTT\">github repo</a> for more information</p>")
@@ -3502,6 +3825,14 @@ class VTTMainWindow(QMainWindow):
 
         self.scene = scene
 
+        # XXX Since there are so many setScene spurious calls, keep the focus if
+        #     locked across setScene calls. Specifically CombatTracker calls
+        #     setScene on every update of combat stats. Remove once updates are
+        #     piecemeal
+        fogCenter = None
+        if ((self.gscene is not None) and self.gscene.getFogCenterLocked()):
+            fogCenter = self.gscene.getFogCenter()
+
         # XXX Verify if all this old gscene cleaning up is necessary and/or
         #     enough
         if (self.gscene is not None):
@@ -3510,6 +3841,9 @@ class VTTMainWindow(QMainWindow):
         self.fog_polys = []
 
         gscene = VTTGraphicsScene(scene)
+        if (fogCenter is not None):
+            gscene.setFogCenterLocked(True)
+            gscene.setFogCenter(fogCenter)
         gscene.changed.connect(self.sceneChanged)
         # XXX It's not clear the BSP is helping on dynamic scenes with fog
         #     (although the fog is not selectable so it shouldn't be put in the
@@ -3523,13 +3857,17 @@ class VTTMainWindow(QMainWindow):
         else:
             self.setWindowTitle("QtVTT")
 
+        # Updating for every single element of the scene is unnecessary, block
+        # signals, unblock when done and update manually below
+        gscene.blockSignals(True)
         self.populateGraphicsScene(gscene, scene)
         self.graphicsView.setScene(gscene)
+        gscene.blockSignals(False)
 
         self.player.stop()
         self.playlist.clear()
         for track in scene.music:
-            logger.info("Adding music track %r", filepath)
+            logger.info("Adding music track %r", track.filepath)
             self.playlist.addMedia(QMediaContent(QUrl.fromLocalFile(track.filepath)))
         
 
@@ -3699,7 +4037,7 @@ class VTTMainWindow(QMainWindow):
             return
 
         # XXX Allow music area, etc
-        # XXX Get metadata from music        
+        # XXX Get metadata from music
         s = Struct(**{
             # XXX Fix all the path mess for embedded assets
             "filepath" :  os.path.relpath(filepath), 
@@ -3854,11 +4192,81 @@ class VTTMainWindow(QMainWindow):
 
         return dock
 
+    def findBrowser(self):
+        logger.info("")
+        # Use object name as it's more deterministic than windowTitle which may
+        # have collisions that cause flip flopping across invocations
+        browsers = sorted([browser for browser in self.findChildren(DocBrowser)], 
+            cmp=lambda a,b: cmp(self.findParentDock(a).objectName(), self.findParentDock(b).objectName()))
+        # If there are no browsers or ctrl+shift is pressed, create a new one
+        ctrlShift = int(Qt.ControlModifier | Qt.ShiftModifier)
+        if ((len(browsers) == 0) or 
+            # XXX Have the signal send new/existing browser?
+            (int(qApp.keyboardModifiers()) & ctrlShift) == ctrlShift):
+            dock, browser = self.createBrowser()
+
+        else:
+            for browser in browsers:
+                # Note isVisible returns true for all tabified docks, use
+                # visibleRegion empty checks instead
+                if (not browser.visibleRegion().isEmpty()):
+                    # If a browser is visible, use that one
+                    break
+
+            else:
+                # If a browser was found but it's not visible, bring to front
+                browser = browsers[0]
+                dock = self.findParentDock(browser)
+                # Raise the tab, keep the same focus
+                dock.show()
+                dock.raise_()
+
+            # Ctrl is pressed and a browser was found, create a new tab
+            if ((int(qApp.keyboardModifiers()) & Qt.ControlModifier) != 0):
+                dock, newBrowser = self.createBrowser()
+                self.tabifyDockWidget(self.findParentDock(browser), dock)
+                # Raise the tab, keep the same focus
+                dock.show()
+                dock.raise_()
+                browser = newBrowser
+
+        return browser
+
+    def browseMonster(self, filepath_or_id):
+        logger.info("%s" % filepath_or_id)
+        browser = self.findBrowser()
+        filepath = filepath_or_id
+        if (not filepath_or_id.lower().endswith((".htm", ".html"))):
+            logger.info("Searching for monster with id %s", filepath_or_id)
+            # XXX Cache this somewhere
+            filepath = os.path.join("_out", "monsters2.csv")
+            with open(filepath, "rb") as f:
+                rows = list(csv.reader(f, delimiter="\t"))
+                headers = rows[0]
+                linkIndex = index_of(headers, "Link")
+                nameIndex = index_of(headers, "Name")
+                for row in rows:
+                    if (filepath_or_id == row[nameIndex]):
+                        logger.info("Found monster id %s filepath %s", filepath_or_id, row[linkIndex])
+                        filepath = row[linkIndex]
+                        break
+                else:
+                    filepath = "Monsters1/MM00000.htm"
+        
+        browser.setSourcePath(os.path.join(DocBrowser.docDirpath, filepath))
+
+    def browseQuery(self, query):
+        self.info("query %s", query)
+        browser = self.findBrowser()
+        browser.lineEdit.setText(query)
+
     def createCombatTracker(self, uuid = None):
         tracker = CombatTracker()
         dock = self.wrapInDockWidget(tracker, "Combat Tracker", uuid)
         
         tracker.sceneChanged.connect(self.updateFromCombatTracker)
+
+        tracker.browseMonster.connect(self.browseMonster)
 
         return dock, tracker
 
@@ -3881,6 +4289,7 @@ class VTTMainWindow(QMainWindow):
         dock = self.wrapInDockWidget(builder, "Encounter Builder", uuid)
 
         builder.addTokensButton.clicked.connect(lambda : self.addTokensFromEncounter(builder))
+        builder.browseMonster.connect(self.browseMonster)
         
         return dock, builder
 
@@ -3964,23 +4373,50 @@ class VTTMainWindow(QMainWindow):
 
     def setDockStyle(self, dock, focused):
         logger.info("%s, %s", dock.windowTitle(), focused)
+        # XXX Setting this stylesheet causes random font resizing on table
+        #     cellwidgets when clicked on the table row? (no longer noticeable
+        #     since the table doesn't use QLabels for hyperlinks) Do this with
+        #     palette changes?
         if (focused):
+            # See palette CSS reference at https://doc.qt.io/qt-5/stylesheet-reference.html
+            # There's no way of telling focused and non focused dock widgets
+            # apart, different style sheets need to be set as they are focused
+            # in or out
             dock.setStyleSheet("""
-                QDockWidget::title {
-                    text-align: left; /* align the text to the left */
-                    background: dodgerblue;
-                    padding-left: 5px;
+                QDockWidget::title { text-align: left; /* align the text to the
+                    left */ background: palette(highlight); padding-left: 5px;
+                }
+                /* Setting the title text color has no effect, set the global
+                color instead */ QDockWidget { color: palette(highlighted-text);
                 }
             """)
+
+            # None of active or focus can tell the difference between tabs in
+            # focus and non-focus docks, search the QTabBar associated to this
+            # dock.
+            tabBar = qFindTabBarFromDockWidget(dock)
+            if (tabBar is not None):
+                tabBar.setStyleSheet("""
+                    QTabBar::tab:selected {
+                        background: palette(highlight);
+                        color: palette(highlighted-text); 
+                    }
+                """)
             
         else:
+            # Restore the style sheet
             dock.setStyleSheet("""
                 QDockWidget::title {
-                    text-align: left; /* align the text to the left */
-                    background: lightgray;
+                    text-align: left;  /* align the text to the left */
                     padding-left: 5px;
                 }
             """)
+            tabBar = qFindTabBarFromDockWidget(dock)
+            if (tabBar is not None):
+                tabBar.setStyleSheet("""
+                    QTabBar::tab:selected {
+                    }
+                """)
 
     def focusDock(self, dock):
         logger.info("Focusing %s", dock.windowTitle())
@@ -4002,7 +4438,9 @@ class VTTMainWindow(QMainWindow):
         #     probably overkill
         parent = widget
         while ((parent is not None) and (not isinstance(parent, QDockWidget))):
-            logger.info("dock stack %r", parent.windowTitle())
+            # XXX When playing with table cell widgets and focusing back on the
+            #     table, the focus is not on a window, investigate?
+            logger.info("dock stack %r", getattr(parent, "windowTitle", "Not a window"))
             parent = parent.parent()
 
         return parent
@@ -4018,9 +4456,10 @@ class VTTMainWindow(QMainWindow):
         """
         logger.info("")
 
-        # Findchildren is not consistent across calls, sort by window title
-        # XXX Could also sort by guid once guids are assigned to dockswidgets?
-        allDocks = sorted([dock for dock in self.findChildren(QDockWidget)], cmp=lambda a,b: cmp(a.windowTitle(), b.windowTitle()))
+        # Findchildren is not consistent across calls, sort by object name
+        # (better than window title since there can be multiple windows with the
+        # same title, which would make the tab order to flip flop)
+        allDocks = sorted([dock for dock in self.findChildren(QDockWidget)], cmp=lambda a,b: cmp(a.objectName(), b.objectName()))
 
         visited = set()
         docks = []
@@ -4070,7 +4509,24 @@ class VTTMainWindow(QMainWindow):
         logger.info("current widget %s", self.focusWidget().windowTitle())
         focusedDock = self.findFocusedDock()
 
-        self.prevWindow()
+        # If on a tabbed dock with prev dock outside the tabbed dock, and the next tab
+        # is in the tabbed dock, go to the next tab, otherwise go to the prev
+        # tab
+        tabbedDocks = self.tabifiedDockWidgets(focusedDock)
+        if (len(tabbedDocks) > 0):
+            
+            docks = self.getDocksInTabOrder()
+            i = index_of(docks, focusedDock)
+            if ((docks[i-1] not in tabbedDocks) and (docks[i+1] in tabbedDocks)):
+                logger.info("Closing tabbed dock %s, going to next %s", focusedDock.windowTitle(), docks[i+1])
+                self.nextWindow()
+
+            else:
+                logger.info("Closing tabbed dock %s, going to prev %s", focusedDock.windowTitle(), docks[i-1])
+                self.prevWindow()
+        else:
+                
+            self.prevWindow()
 
         focusedDock.close()
 
@@ -4110,7 +4566,7 @@ class VTTMainWindow(QMainWindow):
             for dock in docks:
                 logger.info("Found dock %s focus %s widget %s" % (dock.windowTitle(), dock.hasFocus(), dock.widget().hasFocus()))
                 if ((prev is focusedDock) or (dock is docks[-1])):
-                    if (dock is docks[-1]):
+                    if (prev is not focusedDock):
                         dock = docks[0]
                     self.focusDock(dock)
                         
@@ -4209,7 +4665,10 @@ class VTTMainWindow(QMainWindow):
             if (getattr(map_token, "ruleset_info", None) is None):
                 map_token.ruleset_info = Struct(**default_ruleset_info)
             else:
-                map_token.ruleset_info = Struct(**map_token.ruleset_info)
+                # Merge with the default in case new fields were added
+                d = dict(default_ruleset_info)
+                d.update(map_token.ruleset_info)
+                map_token.ruleset_info = Struct(**d)
         # XXX Remove once all files have this data
         if ((len(scene.map_tokens) > 0) and (not hasattr(scene.map_tokens[0], "hidden"))):
             for map_token in scene.map_tokens:
@@ -4244,11 +4703,14 @@ class VTTMainWindow(QMainWindow):
 
     def updateFromCombatTracker(self):
         logger.debug("")
-        # XXX Using setscene here causes infinite recursion because cellchanged
-        #     is triggered also for programmatic access done in updateCombatTrackers()
-        #self.updateTree()
-        #self.updateImage()
-        #self.setScene(self.scene)
+        # XXX setScene at this point causes the focus to be lost on the DM view,
+        #     which is undesirable because eg gets lost on every stat
+        #     modification (attack roll, hitpoint update, etc), and locking
+        #     the focus doesnt' survive across setScene either.
+        self.updateTree()
+        self.updateImage()
+        # XXX Use something less heavy handed than setScene
+        self.setScene(self.scene, self.campaign_filepath)
 
     def updateTree(self):
         # XXX Have tabs to tree by folder, by asset type, by layer (note they can 
@@ -4529,10 +4991,11 @@ class VTTMainWindow(QMainWindow):
 
             for header, i in builder.encounterHeaderToColumn.iteritems():
                 item = builder.encounterTable.item(j, i)
-                # XXX Stop using id non valid chars?
+                # XXX Stop using chars non valid for struct fields?
                 if (header == "#AT"):
                     header = "AT"
-                ruleset_info[header] = item.text()
+                cell = item.text()
+                ruleset_info[header] = cell
 
             dirpath = os.path.curdir if self.campaign_filepath is None else os.path.dirname(self.campaign_filepath)
             # XXX Get supported extensions from Qt
@@ -4545,8 +5008,7 @@ class VTTMainWindow(QMainWindow):
             name = ruleset_info["Name"]
             
             del ruleset_info["Name"]
-            del ruleset_info["Filepath"]
-
+            
             ruleset_info = Struct(**ruleset_info)
 
             # Center on viewport, offset each token half a token size
@@ -4562,6 +5024,9 @@ class VTTMainWindow(QMainWindow):
             })
         
             scene.map_tokens.append(map_token)
+            # XXX Looks like this causes lots of updates (several seconds) even
+            #     with a single monster in the encounter table, probably because
+            #     of re-adding the existing tokens? find where to lock updates?
             token = self.gscene.addToken(map_token)
             # Select the pasted item
             token.setSelected(True)
@@ -4919,6 +5384,7 @@ class VTTMainWindow(QMainWindow):
         - fog is updated inside updateimage 
             - gscene.lock & ... & update fog & gscene.unlock
             XXX Not clear the lock is doing anything because of the batching?
+            XXX Use blocksignals for this
         """
         logger.info("sceneChanged")
         gscene = self.gscene
@@ -4968,7 +5434,7 @@ class VTTMainWindow(QMainWindow):
             self.statusScene.setText(s)
     
     def eventFilter(self, source, event):
-        logger.debug("source %r type %d", source, event.type())
+        logger.debug("source %r type %s", class_name(source), qEventTypeToString(event.type()))
         
         if ((event.type() == QEvent.KeyPress) and (source is self.imageWidget)):
             logger.info("text %r key %d", event.text(), event.key())
@@ -5001,6 +5467,6 @@ def main():
     ex = VTTMainWindow()
     ex.show()
     sys.exit(app.exec_())
-	
+    
 if __name__ == '__main__':
    main()

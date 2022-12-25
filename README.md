@@ -22,7 +22,7 @@ Virtual Table Top written in Python and Qt
 
 ![image](https://user-images.githubusercontent.com/6446344/207979570-083f0404-b36d-4d6a-b69e-4cd095d546f7.png)
 
-### Documentation browsing, combat tracker, encounter browser
+### Documentation browsing, combat tracker, encounter builder
 
 ![image](https://user-images.githubusercontent.com/6446344/208770713-77b870b3-4588-45d0-a009-cec9ce1d8307.png)
 
