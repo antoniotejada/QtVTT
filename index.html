@@ -132,9 +132,8 @@ https://henryegloff.com/fullscreen-button/
 .imgbox {
     display: grid;
     height: 100%;
-    /* Don't leak map size in non-fullscreen */
-    background-color: rgb(196, 196, 196);
-    
+    /* Use fogColor and don't leak map dimensions in non-fullscreen */
+    background-color: rgb(0, 0, 0);
 }
 
 .imgbox::backdrop {
@@ -391,12 +390,13 @@ function onLoad() {
         const img = document.getElementById("canvas");
         //img.src = "image.png" + new Date().getTime();
         img.src = "image.png?" + new Date().getTime();
-    }, 5000)
+    }, 1000)
 }
 </script>
 </head>
 <body onload="onLoad()">
     <div class="imgbox" id ="imgbox">
+        <!---
         <div class = "token dragme"  id="token0">
             <table>
                 <tr><td class="token-image">
@@ -413,7 +413,8 @@ function onLoad() {
                 <tr><td class="token-label">Warrardio</td></tr>
             </table>
         </div>
+        -->
         <img src="image.png" id="canvas" class="center-fit" />
-    </div>
+    </div>    
 </body>
 </html>

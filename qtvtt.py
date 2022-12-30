@@ -155,6 +155,10 @@ def report_versions():
     logger.info("QLibraryInfo.BinariesPath: %s", QLibraryInfo.location(QLibraryInfo.BinariesPath))
 
 def print_gc_stats(collect = True):
+    # XXX This takes multiple seconds eg when "x" cells in the the
+    #     combattracker, disabled (probably due to innefficient setscene which
+    #     calls addImage, review when scene update is piecemeal)
+    return 
     import gc
     logger.info("GC stats")
 
@@ -290,13 +294,56 @@ def qtuple(q):
         # Note this returns x,y,w,h to match Qt parameters
         return (qtuple(q.topLeft()), qtuple(q.size()))
 
+    elif (isinstance(q, (QColor))):
+        return (q.red(), q.green(), q.blue())
+
     else:
         assert False, "Unhandled Qt type!!!"
 
-eventTypeToName = { getattr(QEvent, name) : name for name in vars(QEvent) if type(getattr(QEvent, name)) == QEvent.Type}
+eventTypeToName = {
+    getattr(QEvent, name) : name for name in vars(QEvent) 
+    if isinstance(getattr(QEvent, name), QEvent.Type)
+}
 def qEventTypeToString(eventType):
-
     return eventTypeToName.get(eventType, str(eventType))
+
+itemChangeToName = { 
+3 : "ItemEnabledChange",
+13 : "ItemEnabledHasChanged",
+1 : "ItemMatrixChange",
+0 : "ItemPositionChange",
+9 : "ItemPositionHasChanged",
+8 : "ItemTransformChange",
+10 : "ItemTransformHasChanged",
+28 : "ItemRotationChange",
+29 : "ItemRotationHasChanged",
+30 : "ItemScaleChange",
+31 : "ItemScaleHasChanged",
+32 : "ItemTransformOriginPointChange",
+33 : "ItemTransformOriginPointHasChanged",
+4 : "ItemSelectedChange",
+14 : "ItemSelectedHasChanged",
+2 : "ItemVisibleChange",
+12 : "ItemVisibleHasChanged",
+5 : "ItemParentChange",
+15 : "ItemParentHasChanged",
+6 : "ItemChildAddedChange",
+7 : "ItemChildRemovedChange",
+11 : "ItemSceneChange",
+16 : "ItemSceneHasChanged",
+17 : "ItemCursorChange",
+18 : "ItemCursorHasChanged",
+19 : "ItemToolTipChange",
+20 : "ItemToolTipHasChanged",
+21 : "ItemFlagsChange",
+22 : "ItemFlagsHaveChanged",
+23 : "ItemZValueChange",
+24 : "ItemZValueHasChanged",
+25 : "ItemOpacityChange",
+26 : "ItemOpacityHasChanged",
+27 : "ItemScenePositionHasChanged", }
+def qItemChangeToString(change):
+    return itemChangeToName.get(change, str(change))
 
 def qFindTabBarFromDockWidget(dock):
     logger.info("%s", dock.windowTitle())
@@ -997,6 +1044,7 @@ class CombatTracker(QWidget):
         super(CombatTracker, self).__init__(parent)
 
         self.updatesBlocked = False
+        self.displayInitiativeOrder = True
 
         headers = [
             "Name", "PC", "I", "I+", "A(D)", "A+", "HD", "HP", "HP_", "AC", 
@@ -1025,6 +1073,11 @@ class CombatTracker(QWidget):
         
         hbox = QHBoxLayout()
         hbox.addStretch()
+        button = QPushButton("Clear Rolls")
+        self.rollAttackButton = button
+        button.clicked.connect(self.clearRolls)
+        hbox.addWidget(button)
+        hbox.setStretchFactor(button, 0)
         button = QPushButton("Roll Hit Points")
         self.rollAttackButton = button
         button.clicked.connect(self.rollHitPoints)
@@ -1068,9 +1121,38 @@ class CombatTracker(QWidget):
         """
         self.updatesBlocked = blocked
         if (not self.updatesBlocked):
-            self.table.blockSignals(True)
-            self.sceneChanged.emit()
-            self.table.blockSignals(False)
+            with (QSignalBlocker(self.table)):
+                self.sceneChanged.emit()
+
+    def clearRolls(self):
+        logger.info("")
+        table = self.table
+
+        # XXX Each cell modification causes a scene update, block updates and
+        #     unblock at the end. Remove once scene updates are piecewise
+        self.setUpdatesBlocked(True)
+
+        # Disable sorting otherwise items will sort themselves mid-insertion
+        # interfering with insertion
+        table.setSortingEnabled(False)
+
+        for j in xrange(table.rowCount()):
+            # Don't clear those tagged as PC, also don't clear those that are 
+            # already empty since they could be in use in a different combat 
+            # tracker (but there's no need to check for that since setting the
+            # empty value again won't trigger a change and won't mess with
+            # the tokens owned by that other combat tracker)
+            # XXX Eventually combat trackers will only contain the tokens they
+            #     own instead of all the tokens in the scene and and the above
+            #     comment can be tweaked
+            if (table.item(j, self.headerToColumn["PC"]).text() == ""):
+                table.item(j, self.headerToColumn["I"]).setText("")
+                table.item(j, self.headerToColumn["A(D)"]).setText("")
+        
+        table.setSortingEnabled(True)
+
+        self.setUpdatesBlocked(False)
+
 
     def rollAttack(self):
         logger.info("")
@@ -1123,9 +1205,47 @@ class CombatTracker(QWidget):
 
         self.setUpdatesBlocked(False)
 
+    def setDisplayInitiativeOrder(self, display):
+        # XXX This and the other combattracker updates resets the player view,
+        #     find out why
+        logger.info("display %s", display)
+        table = self.table
+
+        # XXX Each cell modification causes a scene update, block updates and
+        #     unblock at the end. Remove once scene updates are piecewise
+        self.setUpdatesBlocked(True)
+
+        # Disable sorting otherwise items will sort themselves mid-insertion
+        # interfering with insertion
+        table.setSortingEnabled(False)
+
+        self.displayInitiativeOrder = display
+        for j in xrange(table.rowCount()):
+            # Only modify the tockens tracked in this combat tracker (PC or not,
+            # but only with non empty initiative)
+            item = table.item(j, self.headerToColumn["I"])
+            if (item.text() != ""):
+                if (display):
+                    # Toggle the value to trigger writing the right value to center
+                    # (setting the same value doesn't trigger, needs to be toggled)
+                    text = item.text()
+                    item.setText("")
+                    item.setText(text)
+
+                else:
+                    # Clear the center label, this combattracker is no longer 
+                    # using it
+                    item.data(Qt.UserRole).center = ""
+
+        table.setSortingEnabled(True)
+
+        self.setUpdatesBlocked(False)
+
     def rollInitiative(self):
         logger.info("")
         table = self.table
+
+        # XXX If multiple cells or a row selected, roll only for that row
 
         # XXX Each cell modification causes a scene update, block updates and
         #     unblock at the end. Remove once scene updates are piecewise
@@ -1146,14 +1266,11 @@ class CombatTracker(QWidget):
                 cell = "%d" % initiative
                 
                 table.item(j, self.headerToColumn["I"]).setText(cell)
-        
-        # XXX Display the initiative roll or the order on the tokens
-        # XXX See https://game-icons.net/ for status icons
+
+        table.setSortingEnabled(True)
 
         self.setUpdatesBlocked(False)
 
-        table.setSortingEnabled(True)
-    
     def rollHitPoints(self):
         logger.info("")
         table = self.table
@@ -1199,6 +1316,44 @@ class CombatTracker(QWidget):
         
         if (header == "Name"):
             token.name = text
+
+        elif ((header == "I") and (self.displayInitiativeOrder)):
+            # XXX This assumes multiple combattrackers target disjoint tokens
+            if (text == ""):
+                token.center = ""
+
+            else:
+                # Find out the initiative order 
+                items = [table.item(i, col) for i in xrange(table.rowCount()) ]
+                # Sort, put empties at the end
+                def compInitiative(a, b):
+                    if (a.text() == ""):
+                        return cmp(1, 0)
+                        
+                    elif (b.text() == ""):
+                        return cmp(0, 1)
+                    
+                    else:
+                        # XXX This should look at something to break ties? in theory
+                        #     the tie order should be consistent as long as there
+                        #     are no insertions in the table
+                        return cmp(float(a.text()), float(b.text()))
+
+                # XXX Cache this list?
+
+                # XXX This has to match the order when sorting by initiative
+                #     column, which seems to be the case (other than sorting
+                #     empties at the top vs. bottom), but change the column sort
+                #     so it uses the same comparison function to be sure?
+                # XXX This should probably be saved in the ruleset data in case
+                #     encounters are resumed across sessions?
+                items = sorted(items, cmp=compInitiative)
+
+                # By changing the initiative of this token, the initiative order
+                # of all tokens may have changed, update all tokens
+                for i, item in enumerate(items):
+                    if (item.text() != ""):
+                        item.data(Qt.UserRole).center = "%d" % (i+1)
             
         else:
             if (getattr(token, "ruleset_info", None) is None):
@@ -1255,77 +1410,78 @@ class CombatTracker(QWidget):
         # interfering with insertion
         table.setSortingEnabled(False)
 
-        # Delete removed rows, starting from the end of the table
-        for i in xrange(table.rowCount()-1, -1, -1):
-            # This can be None if recycling a table on a new scene?
-            if ((table.item(i, 0) is None) or (table.item(i, 0).data(Qt.UserRole) not in scene.map_tokens)):
-                logger.info("removing row %d", i)
-                table.removeRow(i)
-        
-        # Modify existing and add new rows
-        for token in scene.map_tokens:
-            if (getattr(token, "ruleset_info", None) is not None) :
-                d = {
-                    "Name" : token.name,
-                    "HD" : token.ruleset_info.HD,
-                    "HP" : token.ruleset_info.HP,
-                    "AC" : token.ruleset_info.AC,
-                    "#AT" : token.ruleset_info.AT,
-                    "MR" : token.ruleset_info.MR,
-                    "T0" : token.ruleset_info.T0,
-                    "Damage" : token.ruleset_info.Damage,
-                    "Notes" : token.ruleset_info.Notes,
-                    "Alignment" : token.ruleset_info.Alignment,
-                }
-            else:
-                d = { "Name" : token.name }
+        with QSignalBlocker(table):
+            # Delete removed rows, starting from the end of the table
+            for i in xrange(table.rowCount()-1, -1, -1):
+                # This can be None if recycling a table on a new scene?
+                if ((table.item(i, 0) is None) or (table.item(i, 0).data(Qt.UserRole) not in scene.map_tokens)):
+                    logger.info("removing row %d", i)
+                    table.removeRow(i)
+            
+            # Modify existing and add new rows
+            for token in scene.map_tokens:
+                if (getattr(token, "ruleset_info", None) is not None) :
+                    d = {
+                        "Name" : token.name,
+                        "HD" : token.ruleset_info.HD,
+                        "HP" : token.ruleset_info.HP,
+                        "AC" : token.ruleset_info.AC,
+                        "#AT" : token.ruleset_info.AT,
+                        "MR" : token.ruleset_info.MR,
+                        "T0" : token.ruleset_info.T0,
+                        "Damage" : token.ruleset_info.Damage,
+                        "Notes" : token.ruleset_info.Notes,
+                        "Alignment" : token.ruleset_info.Alignment,
+                    }
+                else:
+                    d = { "Name" : token.name }
 
-            # Find the row with this token
-            for i in xrange(table.rowCount()):
-                if (table.item(i, 0).data(Qt.UserRole) == token):
-                    logger.info("modifying row %d", i)
-                    row = i
-                    break
-            else:
-                # No row, create one
-                logger.debug("creating row %d", table.rowCount())
-                row = table.rowCount()
-                table.insertRow(row)
-                
-            for i in xrange(table.columnCount()):
-                header = table.horizontalHeaderItem(i).text()
+                # Find the row with this token
+                for i in xrange(table.rowCount()):
+                    if (table.item(i, 0).data(Qt.UserRole) == token):
+                        logger.info("modifying row %d", i)
+                        row = i
+                        break
+                else:
+                    # No row, create one
+                    logger.debug("creating row %d", table.rowCount())
+                    row = table.rowCount()
+                    table.insertRow(row)
+                    
+                for i in xrange(table.columnCount()):
+                    header = table.horizontalHeaderItem(i).text()
 
-                if (table.item(row, i) is None):
-                    logger.debug("setting item %d, %d", row, i)
-                    if (header in self.numericHeaders):
-                        item = NumericTableWidgetItem()
+                    if (table.item(row, i) is None):
+                        logger.debug("setting item %d, %d", row, i)
+                        if (header in self.numericHeaders):
+                            item = NumericTableWidgetItem()
 
-                    elif (header == "Name"):
-                        item = LinkTableWidgetItem()
+                        elif (header == "Name"):
+                            item = LinkTableWidgetItem()
+
+                        else:
+                            item = QTableWidgetItem()
+                        # Note this triggers a cellChanged event, but there's no
+                        # token set yet as data, so it will be ignored
+                        table.setItem(row, i, item)
+                    
+                    else:
+                        item = table.item(row, i)
+
+                    if (header in d):
+                        cell = d[header]
+                        if (i == self.headerToColumn["Name"]):
+                            item.setLink(token.ruleset_info.Id)
 
                     else:
-                        item = QTableWidgetItem()
+                        cell = item.text()
+                    logger.debug("setting text %d, %d, %r", row, i, cell)
                     # Note this triggers a cellChanged event, but there's no
                     # token set yet as data, so it will be ignored
-                    table.setItem(row, i, item)
-                
-                else:
-                    item = table.item(row, i)
-
-                if (header in d):
-                    cell = d[header]
-                    if (i == self.headerToColumn["Name"]):
-                        item.setLink(token.ruleset_info.Id)
-
-                else:
-                    cell = item.text()
-                logger.debug("setting text %d, %d, %r", row, i, cell)
-                # Note this triggers a cellChanged event, but there's no
-                # token set yet as data, so it will be ignored
-                item.setText(cell)
-                logger.debug("setting data %d, %d, %s", row, i, token)
-                item.setData(Qt.UserRole, token)
-                
+                    item.setText(cell)
+                    logger.debug("setting data %d, %d, %s", row, i, token.name)
+                    item.setData(Qt.UserRole, token)
+                    
 
         table.setSortingEnabled(True)
 
@@ -1679,6 +1835,8 @@ class DocBrowser(QWidget):
 
         lineEdit.textChanged.connect(self.textChanged)
         lineEdit.returnPressed.connect(self.returnPressed)
+        # XXX This should open in a new browser/tab if ctrl is pressed the same
+        #     way the monster browser does
         listWidget.currentItemChanged.connect(self.listCurrentItemChanged)
         textEdit.sourceChanged.connect(self.browserSourceChanged)
         tocTree.currentItemChanged.connect(self.treeCurrentItemChanged)
@@ -2221,11 +2379,13 @@ class ImageWidget(QScrollArea):
         self.setWidget(imageLabel)
         self.setWidgetResizable(self.fitToWindow)
         self.setAlignment(Qt.AlignCenter)
-        self.setStyleSheet("background-color:rgb(196, 196, 196);")
-
+        
         self.viewport().installEventFilter(self)
 
         self.setCursor(Qt.OpenHandCursor)
+
+    def setBackgroundColor(self, color):
+        self.viewport().setStyleSheet("background-color:rgb%s;" % (qtuple(color),))
 
     def setImage(image):
         if (image.colorSpace().isValid()):
@@ -2400,6 +2560,12 @@ def load_test_scene():
 
 
 class GraphicsPixmapNotifyItem(QGraphicsPixmapItem):
+    """
+    Create a notify item since monkey patching itemChange 
+        QGraphicsPixmapItem.itemChange = lambda s, c, v: logger.info("itemChange %s", v)
+    doesn't work
+    """
+
     def sceneEventFilter(self, watched, event):
         # The main token item receives events from the label item in order to
         # detect when label editing ends
@@ -2446,10 +2612,11 @@ class GraphicsPixmapNotifyItem(QGraphicsPixmapItem):
             elif (event.key() == Qt.Key_Return):
                 # Setting the focus to the parent causes focus out and accept
                 self.setFocus()
+                result = True
 
             else:
                 result = watched.sceneEvent(event)
-
+            
             gscene.adjustTokenGeometry(self)
             handled = True
             
@@ -2463,27 +2630,19 @@ class GraphicsPixmapNotifyItem(QGraphicsPixmapItem):
         Nested QGraphicsItems don't return the children + parent boundingRect by
         default, just the parent. This causes corruption "trails" when dragging
         the parent if the children paint outside the parent.
-        
-        Return parent + children boundingRect, but this has issues with code
-        using the bounding rect expecting to get only the pixmap bounding rect
-        (eg centering is affected by the label size)
+
+        Return parent + children boundingRect, this may give issues if any code
+        assumes the center of the bounding rect matches the center of the
+        pixmap, since this boundingRect includes the label bounding rect.
         """
         
         rect = super(GraphicsPixmapNotifyItem, self).boundingRect()
-        childRect = self.childrenBoundingRect()
-        if (len(self.childItems()) > 0):
-            if (False):
-                logger.debug("%s vs %s + %s (%s) = %s", qtuple(rect), 
-                    qtuple(self.pixmap().rect()), 
-                    qtuple(self.childItems()[0].boundingRect()), 
-                    qtuple(self.childrenBoundingRect()), 
-                    qtuple(rect | self.childrenBoundingRect()))
-            
-            childRect.moveTo(self.childItems()[0].pos())
-        return rect | childRect
+        rect |= self.childrenBoundingRect()
+        logger.info("%s %s", self.data(0).name, qtuple(rect))
+        return rect
 
     def itemChange(self, change, value):
-        logger.debug("")
+        logger.debug("change %s value %s", qItemChangeToString(change), value)
         # Scene can be none before the item is added to the scene
         if (self.scene() is not None):
             return self.scene().itemChanged(self, change, value)
@@ -2514,6 +2673,9 @@ class VTTGraphicsScene(QGraphicsScene):
         self.gridItem = QGraphicsItemGroup()
         self.fogCenter = None
         self.fogCenterLocked = False
+        self.fog_polys = []
+        self.fog_mask = None
+        self.fogColor = None
 
         self.cellDiameter = 70
         self.snapToGrid = True
@@ -2544,7 +2706,7 @@ class VTTGraphicsScene(QGraphicsScene):
         """
         This receives notifications from GraphicsPixmapNotifyItem
         """
-        logger.info("change %s", change)
+        logger.info("change %s", qItemChangeToString(change))
         
         if ((change == QGraphicsItem.ItemPositionChange) and self.snapToGrid):
             # value is the new position, snap 
@@ -2570,7 +2732,7 @@ class VTTGraphicsScene(QGraphicsScene):
         return value
 
     def getFogCenter(self):
-        logger.info("fogCenter %s", self.selectedItems())
+        logger.info("")
         # Note focusItem() is None when the view tab focus is switched away
         # unless stickyFocus is set, and selectedItems is always empty unless
         # items are selected. Also, focusItem() can be any item that can be
@@ -2677,18 +2839,23 @@ class VTTGraphicsScene(QGraphicsScene):
     def setWallsVisible(self, visible):
         self.makeDirty()
         self.allWallsItem.setVisible(visible)
-
-    def setTokensHiddenFromPlayerVisible(self, visible):
-        logger.info(visible)
-        #self.makeDirty()
+    
+    def setTokensVisible(self, visible, onlyHiddenFromPlayer = False):
+        logger.info("visible %s onlyHiddenFromPlayer %s", visible, onlyHiddenFromPlayer)
+        # self.makeDirty() 
+        
+        # XXX Don't update on every token change, do update at the end, note
+        #     itemChange notifications are not blocked by blocksignals, either
+        #     remove and restore the ItemSendsGeometryChanges flag for this item
+        #     or roll some blocking counter
         for token in self.tokenItems:
-            if (token.data(0).hidden):
-                # Changing z value makes the token lose focus, push it beind the
-                # image instead
-
+            if ((not onlyHiddenFromPlayer) or token.data(0).hidden):
+                # Hiding the token makes it lose focus, push it behind the image
+                # instead
                 # XXX Do the same thing for the other items? (walls, doors)
                 if (visible):
                     token.setZValue(0.4)
+                    
                 else:
                     token.setZValue(-1)
                     
@@ -2697,26 +2864,61 @@ class VTTGraphicsScene(QGraphicsScene):
         self.allDoorsItem.setVisible(visible)
 
     def adjustTokenGeometry(self, token):
-        pixItem = token
-        txtItem = pixItem.childItems()[0]
+        pixItem = self.getTokenPixmapItem(token)
+        txtItem = self.getTokenLabelItem(pixItem)
         pix = pixItem.pixmap()
         map_token = pixItem.data(0)
 
         pixItem.setScale(map_token.scale / pix.width())
         # QGraphicsPixmapItem are not centered by default, do it
-        pixItem.setOffset(-qSizeToPoint(pixItem.pixmap().size() / 2.0))
+        pixItem.setOffset(-qSizeToPoint(pix.size() / 2.0))
+
+        # Note 
+        #   txtItem.document().setDefaultTextOption(QTextOption(Qt.AlignCenter))
+        # does center the text in the width set with setTextWidth, but the item
+        # anchor is still the item position so still needs to be set to the top
+        # left corner, which changes depending on the text length
+        # Note setTextInteractionFlags(Qt.TextEditorInteraction) is set on
+        # demand when editing the label
         txtItem.setScale(1.0/pixItem.scale())
-        # Calculate the position taking into account the text item reverse
-        # scale                
+        # Calculate the position taking into account the text item reverse scale
         pos = QPointF(
             0 - txtItem.boundingRect().width() / (2.0 * pixItem.scale()), 
-            pixItem.pixmap().height() /2.0 - txtItem.boundingRect().height() / (2.0 * pixItem.scale())
+            pix.height() /2.0 - txtItem.boundingRect().height() / (2.0 * pixItem.scale())
         )
         txtItem.setPos(pos)
+
+        # XXX This should probably have an array of labels (corners, center) or
+        #     icons/badges
+        txtItem = token.childItems()[1]
+        center = getattr(map_token, "center", "")
+        if (center == ""):
+            txtItem.setHtml("")
+
+        else:
+            txtItem.setHtml("<div style='font-weight:bold; background:rgb(255, 255, 255, 64);'>%s</div>" % center)
+        txtItem.setScale(1.0/pixItem.scale())
+        pos = QPointF(
+            0 - txtItem.boundingRect().width() / (2.0 * pixItem.scale()), 
+            0 - txtItem.boundingRect().height() / (2.0 * pixItem.scale()),
+        )
+        txtItem.setPos(pos)
+        
+        # XXX This is not really token geometry, but it centralizes the tooltip
+        #     update when the label is updated or when any other stat is updated
+        #     in the CombatTracker, etc
+        pixItem.setToolTip("<b>" + map_token.name + "</b>" + "<br><b>T0</b>:%s <b>AT</b>:%s <b>D</b>:%s<br><b>AC</b>:%s <b>HP</b>:%s" %(
+            map_token.ruleset_info.T0,
+            map_token.ruleset_info.AT,
+            map_token.ruleset_info.Damage,
+            map_token.ruleset_info.AC,
+            map_token.ruleset_info.HP if (map_token.ruleset_info.HP_ == "") else map_token.ruleset_info.HP_
+        ))
         
     def setTokenLabelText(self, token, text):
         logger.debug("%s", text)
         txtItem = self.getTokenLabelItem(token)
+        # Use HTML since it allows setting the background color
         txtItem.setHtml("<div style='background:rgb(255, 255, 255, 128);'>%s</div>" % text)
 
     def addToken(self, map_token):
@@ -2734,14 +2936,6 @@ class VTTGraphicsScene(QGraphicsScene):
         pix = pix.scaled(max_token_size, Qt.KeepAspectRatio, Qt.SmoothTransformation)
         pixItem = GraphicsPixmapNotifyItem(pix)
         pixItem.setFlags(QGraphicsItem.ItemIsFocusable | QGraphicsItem.ItemIsSelectable | QGraphicsItem.ItemIsMovable | QGraphicsItem.ItemSendsScenePositionChanges)
-        # XXX Tooltip could have more stats (THAC0, AC, etc)
-        pixItem.setToolTip("<b>" + map_token.name + "</b>" + "<br><b>T0</b>:%s <b>AT</b>:%s <b>D</b>:%s<br><b>AC</b>:%s <b>HP</b>:%s" %(
-            map_token.ruleset_info.T0,
-            map_token.ruleset_info.AT,
-            map_token.ruleset_info.Damage,
-            map_token.ruleset_info.AC,
-            map_token.ruleset_info.HP if (map_token.ruleset_info.HP_ == "") else map_token.ruleset_info.HP_
-        ))
         pixItem.setPos(*map_token.scene_pos)
         pixItem.setData(0, map_token)
         pixItem.setCursor(Qt.SizeAllCursor)
@@ -2749,28 +2943,25 @@ class VTTGraphicsScene(QGraphicsScene):
         pixItem.setZValue(0.4)
         self.setTokenHiddenFromPlayer(pixItem, map_token.hidden)
 
-        # XXX Monkey patching itemChange doesn't work
-        #QGraphicsPixmapItem.itemChange = lambda s, c, v: logger.info("itemChange %s", v)
-        
         txtItem = QGraphicsTextItem(pixItem)
-        # Use HTML since it allows setting the background color
         self.setTokenLabelText(pixItem, map_token.name)
-        # Keep the label always at the same size disregarding the token
-        # size, because the label is a child of the pixitem it gets affected
-        # by it. Also reduce the font a bit
+        # Keep the label always at the same size disregarding the token size,
+        # because the label is a child of the pixitem it gets affected by it.
+        # Also reduce the font a bit
         font = txtItem.font()
         font.setPointSize(txtItem.font().pointSize() *0.75)
         txtItem.setFont(font)
-        # XXX This needs to hook on the item's focusOutEvent to unfocus and to
-        #     recenter the label and to update the scene tree widget and the
-        #     tooltip
-        #     Note 
-        #     txtItem.document().setDefaultTextOption(QTextOption(Qt.AlignCenter))
-        #     does center the text in the width set with setTextWidth, but
-        #     the item anchor is still the item position so still needs to be
-        #     set to the top left corner, which changes depending on the 
-        #     text length.
-        #txtItem.setTextInteractionFlags(Qt.TextEditorInteraction)
+        # No need to set TextTokenInteraction since it's disabled by default and
+        # enabled on demand
+
+        centerItem = QGraphicsTextItem(pixItem)
+        font = txtItem.font()
+        font.setPointSize(font.pointSize() * 1.5)
+        centerItem.setFont(font)
+
+        # XXX Have corner badges or status icons? 
+        #     See https://game-icons.net/ https://github.com/game-icons/icons for status icons
+        # XXX Fade token / draw cross on HP_ < 0?
 
         self.adjustTokenGeometry(pixItem)
         
@@ -2872,6 +3063,10 @@ class VTTGraphicsScene(QGraphicsScene):
         self.blendFog = blend
         self.updateFog()
         
+    def setFogColor(self, color):
+        self.fogColor = color
+        # XXX This should update the fog if done after initialization
+
     def updateFog(self, force=False):
         logger.info("updateFog force %s dirty %s draw %s blend %s", force, self.fogPolysDirtyCount != self.dirtyCount, self.fogVisible, self.blendFog)
         gscene = self
@@ -2885,9 +3080,9 @@ class VTTGraphicsScene(QGraphicsScene):
             fogPen = QPen(Qt.black)
 
         else:
-            # Match the background color to prevent map leaks
-            fogBrush = QBrush(QColor(196, 196, 196))
-            fogPen = QPen(QColor(196, 196, 196))
+            # Match the background color to prevent leaking the map dimensions
+            fogBrush = QBrush(self.fogColor)
+            fogPen = QPen(self.fogColor)
         
         # XXX Use gscene.blockSignals to prevent infinite looping 
         #     and/or updateEnabled(False) to optimize redraws
@@ -3126,6 +3321,10 @@ class VTTGraphicsView(QGraphicsView):
     def mouseDoubleClickEvent(self, event):
         logger.info("mouseDoubleClickEvent")
 
+        # Call the inherited event handler to update the focused item before
+        # checking what the focused item is below
+        super(VTTGraphicsView, self).mouseDoubleClickEvent(event)
+
         gscene = self.scene()
         if (gscene.focusItem() is not None):
             focusItem = gscene.focusItem()
@@ -3251,6 +3450,9 @@ class VTTGraphicsView(QGraphicsView):
             # Snap to half cell and move in half cell increments
             # XXX Make this configurable
             # XXX This assumes snapping starts at 0,0
+            # XXX Keep track of the "heading" (even if there's a collision),
+            #     could even be shown on the token and will with which door to
+            #     open/close when there are multiple adjacent doors
             snap_granularity = gscene.getCellDiameter() / 2.0
             move_granularity = snap_granularity
             delta = QPointF(*d[event.key()]) * move_granularity
@@ -3360,6 +3562,8 @@ class VTTGraphicsView(QGraphicsView):
 
         elif (gscene.isToken(gscene.focusItem()) and (event.text() == " ")):
             # Open the adjacent door
+            # XXX Do something about when two doors are adjacent, have a player
+            #     "heading" 
             threshold2 = (gscene.getCellDiameter() ** 2.0) * 1.1
             token_center = gscene.focusItem().sceneBoundingRect().center()
             for door_item in gscene.doors():
@@ -3448,11 +3652,15 @@ class VTTMainWindow(QMainWindow):
     def __init__(self, parent = None):
         super(VTTMainWindow, self).__init__(parent)
 
+        self.profiling = False
+
         self.campaign_filepath = None
         self.recent_filepaths = []
 
         self.gscene = None
         self.scene = None
+
+        self.fogColor = QColor(0, 0, 0)
 
         # XXX scene.changed reentrant flag because updateImage modifies the
         #     scene, probably fix by having two scenes
@@ -3469,6 +3677,8 @@ class VTTMainWindow(QMainWindow):
         imageWidget = ImageWidget()
         # Allow the widget to receive mouse events
         imageWidget.setMouseTracking(True)
+        # Set the background color to prevent leaking the map dimensions
+        imageWidget.setBackgroundColor(self.fogColor)
         # Allow the widget to receive keyboard events
         imageWidget.setFocusPolicy(Qt.StrongFocus)
         imageWidget.installEventFilter(self)
@@ -3633,6 +3843,7 @@ class VTTMainWindow(QMainWindow):
         self.saveAct = QAction("&Save", self, shortcut="ctrl+s", triggered=self.saveScene)
         self.saveAsAct = QAction("Save &As...", self, shortcut="ctrl+shift+s", triggered=self.saveSceneAs)
         self.exitAct = QAction("E&xit", self, shortcut="alt+f4", triggered=self.close)
+        self.profileAct = QAction("Profile", self, shortcut="ctrl+p", triggered=self.profile)
 
         self.recentFileActs = []
         for i in range(most_recently_used_max_count):
@@ -3649,18 +3860,21 @@ class VTTMainWindow(QMainWindow):
         self.importMusicAct = QAction("Import &Music Track...", self, shortcut="ctrl+m", triggered=self.importMusic)
         self.clearWallsAct = QAction("Clear All &Walls...", self, triggered=self.clearWalls)
         self.clearDoorsAct = QAction("Clear All &Doors...", self, triggered=self.clearDoors)
+        self.clearFogAct = QAction("Clear &Fog of War...", self, shortcut="ctrl+f", triggered=self.clearFog)
         self.copyScreenshotAct = QAction("DM &View &Screenshot", self, shortcut="ctrl+alt+c", triggered=self.copyScreenshot)
         self.copyFullScreenshotAct = QAction("DM &Full Screenshot", self, shortcut="ctrl+shift+c", triggered=self.copyFullScreenshot)
         self.newCombatTrackerAct = QAction("New Combat Trac&ker", self, shortcut="ctrl+k", triggered=self.newCombatTracker)
         self.newEncounterBuilderAct = QAction("New Encounter Buil&der", self, shortcut="ctrl+d", triggered=self.newEncounterBuilder)
         self.newBrowserAct = QAction("New &Browser", self, shortcut="ctrl+b", triggered=self.newBrowser)
         self.lockFogCenterAct = QAction("&Lock Fog Center", self, shortcut="ctrl+l", triggered=self.lockFogCenter, checkable=True)
+        self.displayInitiativeOrderAct = QAction("&Display Initiative Order", self, triggered=self.displayInitiativeOrder, checkable=True)
+        self.displayInitiativeOrderAct.setChecked(True)
         self.nextTrackAct = QAction("N&ext Music Track", self, shortcut="ctrl+e", triggered=self.nextTrack)
         self.rewindTrackAct = QAction("Rewind Music Track", self, shortcut="ctrl+left", triggered=self.rewindTrack)
         self.forwardTrackAct = QAction("Forward Music Track", self, shortcut="ctrl+right", triggered=self.forwardTrack)
         self.closeWindowAct = QAction("&Close Window", self, triggered=self.closeWindow)
         self.closeWindowAct.setShortcuts(["ctrl+f4", "ctrl+w"])
-        self.prevWindowAct = QAction("&Prev Window", self, shortcut="ctrl+shift+tab", triggered=self.prevWindow)
+        self.prevWindowAct = QAction("&Previous Window", self, shortcut="ctrl+shift+tab", triggered=self.prevWindow)
         self.nextWindowAct = QAction("&Next Window", self, shortcut="ctrl+tab", triggered=self.nextWindow)
         
         self.aboutAct = QAction("&About", self, triggered=self.about)
@@ -3685,6 +3899,7 @@ class VTTMainWindow(QMainWindow):
             fileMenu.addAction(action)
         fileMenu.addSeparator()
         fileMenu.addAction(self.exitAct)
+        fileMenu.addAction(self.profileAct)
         
         editMenu = QMenu("&Edit", self)
         editMenu.addAction(self.importImageAct)
@@ -3703,6 +3918,7 @@ class VTTMainWindow(QMainWindow):
         editMenu.addSeparator()
         editMenu.addAction(self.clearDoorsAct)
         editMenu.addAction(self.clearWallsAct)
+        editMenu.addAction(self.clearFogAct)
         editMenu.addSeparator()
         editMenu.addAction(self.copyScreenshotAct)
         editMenu.addAction(self.copyFullScreenshotAct)
@@ -3713,6 +3929,7 @@ class VTTMainWindow(QMainWindow):
         viewMenu.addAction(self.newEncounterBuilderAct)
         viewMenu.addSeparator()
         viewMenu.addAction(self.lockFogCenterAct)
+        viewMenu.addAction(self.displayInitiativeOrderAct)
         viewMenu.addSeparator()
         viewMenu.addAction(self.nextTrackAct)
         viewMenu.addAction(self.rewindTrackAct)
@@ -3827,23 +4044,29 @@ class VTTMainWindow(QMainWindow):
 
         # XXX Since there are so many setScene spurious calls, keep the focus if
         #     locked across setScene calls. Specifically CombatTracker calls
-        #     setScene on every update of combat stats. Remove once updates are
-        #     piecemeal
+        #     setScene on every update of combat stats. Also keep the fog mask
+        #     around. Remove once updates are piecemeal. 
         fogCenter = None
-        if ((self.gscene is not None) and self.gscene.getFogCenterLocked()):
-            fogCenter = self.gscene.getFogCenter()
+        fogMask = None
+        if (self.gscene is not None):
+            if (self.gscene.getFogCenterLocked()):
+                fogCenter = self.gscene.getFogCenter()
+            fogMask = self.gscene.fog_mask
 
         # XXX Verify if all this old gscene cleaning up is necessary and/or
         #     enough
         if (self.gscene is not None):
             self.gscene.clear()
             self.gscene.setParent(None)
-        self.fog_polys = []
-
+            self.gscene.fog_polys = []
+        
         gscene = VTTGraphicsScene(scene)
+        gscene.setFogColor(self.fogColor)
         if (fogCenter is not None):
             gscene.setFogCenterLocked(True)
             gscene.setFogCenter(fogCenter)
+        if (fogMask is not None):
+            gscene.fog_mask = fogMask
         gscene.changed.connect(self.sceneChanged)
         # XXX It's not clear the BSP is helping on dynamic scenes with fog
         #     (although the fog is not selectable so it shouldn't be put in the
@@ -3859,11 +4082,10 @@ class VTTMainWindow(QMainWindow):
 
         # Updating for every single element of the scene is unnecessary, block
         # signals, unblock when done and update manually below
-        gscene.blockSignals(True)
-        self.populateGraphicsScene(gscene, scene)
-        self.graphicsView.setScene(gscene)
-        gscene.blockSignals(False)
-
+        with (QSignalBlocker(gscene)):
+            self.populateGraphicsScene(gscene, scene)
+            self.graphicsView.setScene(gscene)
+        
         self.player.stop()
         self.playlist.clear()
         for track in scene.music:
@@ -3933,6 +4155,22 @@ class VTTMainWindow(QMainWindow):
 
             else:
                 self.recentFileActs[i].setVisible(False)
+
+    def profile(self):
+        import cProfile
+        if (self.profiling):
+            self.pr.disable()
+            self.pr.dump_stats(os.path.join("_out", "profile.prof"))
+            self.showMessage("Ended profiling")
+
+        else:
+            self.showMessage("Profiling...", 0)
+            self.pr = cProfile.Profile()
+            self.pr.enable()
+            
+            
+            
+        self.profiling = not self.profiling
 
     def newScene(self):
         scene = Struct()
@@ -4140,6 +4378,14 @@ class VTTMainWindow(QMainWindow):
         # XXX Use something less heavy handed
         self.setScene(self.scene, self.campaign_filepath)
 
+    def clearFog(self):
+        if (QMessageBox.question(self, "Clear fog of war", 
+            "Are you sure you want to clear fog of war?") != QMessageBox.Yes):
+            return
+        self.gscene.fog_mask = None
+
+        self.updateImage()
+        
     def copyScreenshot(self):
         logger.info("copyScreenshot")
         qpix = self.graphicsView.viewport().grab()
@@ -4281,6 +4527,8 @@ class VTTMainWindow(QMainWindow):
         #     the other tracker
         logger.info("")
         dock, tracker = self.createCombatTracker()
+
+        tracker.setScene(self.scene)
         
         return dock, tracker
 
@@ -4322,6 +4570,13 @@ class VTTMainWindow(QMainWindow):
         self.gscene.makeDirty()
         self.gscene.invalidate()
 
+    def displayInitiativeOrder(self):
+        logger.info("display %s", self.displayInitiativeOrderAct.isChecked())
+        # Note the action has already been toggled at this point
+        display = self.displayInitiativeOrderAct.isChecked()
+        for tracker in self.findChildren(CombatTracker):
+            tracker.setDisplayInitiativeOrder(display)
+            
     def nextTrack(self):
         # XXX Hook status changed to the statusbar
         if (self.player.state() != QMediaPlayer.PlayingState):
@@ -4703,14 +4958,20 @@ class VTTMainWindow(QMainWindow):
 
     def updateFromCombatTracker(self):
         logger.debug("")
-        # XXX setScene at this point causes the focus to be lost on the DM view,
-        #     which is undesirable because eg gets lost on every stat
-        #     modification (attack roll, hitpoint update, etc), and locking
-        #     the focus doesnt' survive across setScene either.
-        self.updateTree()
-        self.updateImage()
-        # XXX Use something less heavy handed than setScene
-        self.setScene(self.scene, self.campaign_filepath)
+        # XXX setScene at this point causes the focus to be lost on the DM view
+        #     (and the player view to be reset), which is undesirable because eg
+        #     gets lost on every stat modification (attack roll, hitpoint
+        #     update, etc), as a quick workaround, there's a hack so locking the
+        #     focus survives setscene
+        if (False):
+            # XXX No need to use these two because they are triggered by
+            #     setScene below, put back once picemeal updates are in
+            self.updateTree()
+            self.updateImage()
+
+        else:
+            # XXX Use something less heavy handed than setScene
+            self.setScene(self.scene, self.campaign_filepath)
 
     def updateTree(self):
         # XXX Have tabs to tree by folder, by asset type, by layer (note they can 
@@ -5180,19 +5441,21 @@ class VTTMainWindow(QMainWindow):
                 }
                 ]]> </script>
             """)
-                    
-            sceneRect = list(self.gscene.images())[0].sceneBoundingRect()
+            # XXX This assumes a single background image
+            sceneRect = gscene.imageAt(0).sceneBoundingRect()
             f.write('<image href="image.png" x="%f" y="%f" width="%f" height="%f"/>\n' %
                 (sceneRect.x(), sceneRect.top(), sceneRect.width(), sceneRect.height()))
 
-            for token_item in self.gscene.tokens():
+            for token_item in gscene.tokens():
                 sceneRect = token_item.sceneBoundingRect()
 
                 imformat = "PNG"
                 ba = QByteArray()
                 buff = QBuffer(ba)
                 buff.open(QIODevice.WriteOnly) 
-                ok = token_item.pixmap().save(buff, imformat)
+                pixItem = gscene.getTokenPixmapItem(token_item)
+                pix = pixItem.pixmap()
+                ok = pix.save(buff, imformat)
                 assert ok
                 img_bytes = ba.data()
                 import base64
@@ -5200,15 +5463,15 @@ class VTTMainWindow(QMainWindow):
                 base64_utf8_str = base64.b64encode(img_bytes).decode('utf-8')
 
                 dataurl = 'data:image/png;base64,%s' % base64_utf8_str
-                label_item = token_item.childItems()[0]
+                label_item = gscene.getTokenLabelItem(token_item)
 
                 f.write('<g class="draggable-group" transform="translate(%f,%f) scale(%f)"><image href="%s" width="%f" height="%f"/><text fill="white" font-size="10" font-family="Arial, Helvetica, sans-serif" transform="translate(%f,%f) scale(%f)">%s</text></g>\n' %
-                    (sceneRect.x(), sceneRect.top(), token_item.scale(), dataurl, token_item.pixmap().width(), token_item.pixmap().height(), 
+                    (sceneRect.x(), sceneRect.top(), token_item.scale(), dataurl, pix.width(), pix.height(), 
                         label_item.pos().x(), label_item.pos().y(), label_item.scale(), label_item.toPlainText()))
 
                 f.write('')
 
-            for poly in self.fog_polys:
+            for poly in gscene.fog_polys:
                 poly_string = ["%f,%f" % point for point in poly]
                 poly_string = str.join(" ", poly_string)
 
@@ -5229,31 +5492,197 @@ class VTTMainWindow(QMainWindow):
         self.gscene.setFogVisible(draw_map_fog)
         self.gscene.setBlendFog(blend_map_fog)
         # Fog already updated by setFogVisible and setBlendFog
-        # XXX Missing updating these
-        self.fog_polys = []
         
+    def renderFogOfWar(self, qim, fog_scale, maskFormat):
+        save_masks = False
+        gscene = self.gscene
+        sceneRect = gscene.sceneRect()
+        sceneSize = sceneRect.size().toSize()
+
+        # XXX This assumes the fogcolor is black, it's used elsewhere
+        #     to guarantee the map dimensions are not leaked, should have
+        #     some code to change black to whatever fogColor
+        assert qtuple(self.fogColor) == (0, 0, 0)
+        
+        
+        # XXX Use something lighter to update the fog polys for fog of war,
+        #     since this also generates the fog graphic items
+        self.updateFog(False, False)
+        
+        # Perform the formula
+        
+        # back * (accmask - currentmask) * fade + (back + tokens) * currentmask
+        # newaccmask = accmask + currentmask
+        
+        # Note the first formula can be changed to use newaccmask
+        # instead of accmask which reduces the number of simultaneous
+        # masks needed and also fixes a bug in Qt where doing a
+        # difference of a .fill(Qt.black) fails to do anything
+
+        # Note the back and back + tokens calculations need to be done
+        # in one shot since any overdraw will get corrupted if there's
+        # a composition mode other than overwrite (eg multiply or add)
+        
+        # XXX The fog mask needs to be saved with the scene? or as 
+        #     alpha channel of the background image or store the tokens
+        #     paths and recreate the fog mask at load time?
+        # XXX Needs an option to clear the fog of war
+        # XXX Needs tools to set/clear the fog of war manually
+        #     (rectangles, circles, etc)
+        fog_mask = gscene.fog_mask
+        if ((fog_mask is None) or (fog_mask.size() != sceneSize * fog_scale)):
+            logger.info("Creating fog_mask")
+            fog_mask = QImage(sceneSize * fog_scale, maskFormat)
+            gscene.fog_mask = fog_mask
+            # There's a Qt bug for which operating on a fill(Qt.black)
+            # fails to do anything, this is avoided by using fog_mask + 
+            # current_mask instead of fog_mask below
+            fog_mask.fill(Qt.black)
+
+        acc_mask = fog_mask
+        if (save_masks):
+            acc_mask.save(os.path.join("_out", "acc_mask.png"))
+
+        logger.info("Calculating current_mask")
+        current_mask = QImage(acc_mask.size(), maskFormat)
+        current_mask.fill(Qt.white)
+        p = QPainter(current_mask)
+        p.scale(fog_scale, fog_scale)
+        p.translate(-sceneRect.topLeft())
+        p.setBrush(QBrush(Qt.black))
+        p.setPen(QPen(Qt.black))
+        for poly in gscene.fog_polys:
+            poly = QPolygonF([QPointF(pt[0], pt[1]) for pt in poly])
+            # XXX drawconvexpolygon takes 33%, drawImage 30%, and 10%
+            #     render on fonda.qvt. Having render render fog polygons
+            #     makes render take more time than drawconvexpolygon, so
+            #     doesn't look like a solution?
+            p.drawConvexPolygon(poly)
+        p.end()
+
+        if (save_masks):
+            current_mask.save(os.path.join("_out", "current_mask.png"))
+
+        logger.info("Calculating new_current_mask")
+        p = QPainter(acc_mask)
+        p.setCompositionMode(QPainter.CompositionMode_Plus)
+        p.drawImage(0,0, current_mask)
+        p.end()
+
+        if (save_masks):
+            acc_mask.save(os.path.join("_out", "new_acc_mask.png"))
+        
+        # difference = (accmask - currentmask)
+        logger.info("Creating difference")
+        difference = acc_mask.copy()
+        logger.info("Calculating difference")
+        p = QPainter(difference)
+        p.setCompositionMode(QPainter.CompositionMode_Difference)
+        p.drawImage(0, 0, current_mask)
+        p.end()
+
+        if (save_masks):
+            difference.save(os.path.join("_out", "difference.png"))
+        
+        # scratch = back * fade * difference
+        # Note back needs to be rendered in one shot without any
+        # composition since the ordering of the items is not guaranteed
+        # and would get the composition applied otherwise This means
+        # that the difference calculation and multiply by back cannot be
+        # merged into a single step and the difference needs to be
+        # calculated first and then multiplied in a different step
+        # If there was a single background with no grids, this could
+        # merged with other steps with  
+        #    item = gscene.imageAt(0) p.scale(item.scale(),
+        #    item.scale()) p.drawPixmap(0, 0,
+        #    gscene.imageAt(0).pixmap())
+        # XXX Back * fade could be cached if only token change?
+
+        logger.info("Creating scratch")
+        scratch = QImage(difference.size(), maskFormat)
+        logger.info("Calculating scratch")
+        p = QPainter(scratch)
+        gscene.setTokensVisible(False)
+        gscene.render(p)
+        p.scale(1.0, 1.0)
+        # The rest of the scene state gets restored below
+        gscene.setTokensVisible(True)
+        p.setCompositionMode(QPainter.CompositionMode_Multiply)
+        p.fillRect(scratch.rect(), Qt.gray)
+        p.drawImage(0, 0, difference)
+        p.end()
+
+        if (save_masks):
+            scratch.save(os.path.join("_out", "scratch.png"))
+
+        # (tokens + back) * currentmask + scratch
+        gscene.setTokensVisible(False, True)
+        logger.info("Rendering %d scene items on %dx%d image", len(gscene.items()), qim.width(), qim.height())
+        p = QPainter(qim)
+        gscene.render(p)
+        p.scale(1.0/fog_scale, 1.0/fog_scale)
+        p.setCompositionMode(QPainter.CompositionMode_Multiply)
+        p.drawImage(0, 0, current_mask)
+        p.setCompositionMode(QPainter.CompositionMode_Plus)
+        p.drawImage(0, 0, scratch)
+        p.scale(1.0, 1.0)
+        # This is necessary so the painter winds down before the pixmap
+        # below, otherwise it crashes with "painter being destroyed
+        # while in use"
+        p.end()
+
+        if (save_masks):
+            qim.save(os.path.join("_out", "qim.png"))
+
     def updateImage(self):
-        logger.info("updateImage")
+        logger.info("")
         global img_bytes
         gscene = self.gscene
         fogCenter = gscene.getFogCenter()
-        img_scale = 1.0
 
+        # XXX This allows downscaling the canvas, but ideally the original
+        #     background image should come downscaled already and any fine
+        #     features (grid, text) done at high resolution, since downscaling
+        #     at this point is going to cause blurred text and grid
+        img_scale = 1.0
+        # XXX Scaling fog independently from the image allows downscaling mask
+        #     operations while having readable token labels since tokens are not
+        #     rendered on the fog of war. Unfortunately map features (eg
+        #     furniture) are rendered on the fog of war and appear blurred. In
+        #     addition, downscaling also causes sliver artifacts that don't go
+        #     away because the fog of war is accumlated over time.
+        fog_scale = 1.0 * img_scale
         gscene.setLockDirtyCount(True)
 
         # XXX May want to gscene.clearselection but note that it will need to be
         #     restored afterwards or the focus rectangle will be lost in the DM
         #     view when moving, switching to a different token, etc
+
+        sceneRect = gscene.sceneRect()
+        # Grow to 1x1 in case there's no scene
+        sceneSize = sceneRect.size().toSize().expandedTo(QSize(1, 1))
+        # RGB32 is significantly faster than RGB888, it's also recommended by
+        # QImage.Format Qt documentation. UpdateImage takes 2.8x the time using
+        # RGB888 than RGB32, specifically drawConvexPolygons takes 10x,
+        # drawImage takes 3x, render 1.5x. The fillrate functions take slightly
+        # more: fillRect 0.92x, save 0.85x
+        imageFormat = QImage.Format_RGB32
+        # There's no single 8-bit channel format in Qt 5.3 (Alpha8 and 8bit
+        # grayscale are Qt 5.5), so also use RGB32 for the masks for the above
+        # performance reasons
+        maskFormat = imageFormat
+
+        qim = QImage(sceneSize * img_scale, imageFormat)
         
-        # Grow to 64x64 in case there's no scene
-        qim = QImage(gscene.sceneRect().size().toSize().expandedTo(QSize(1, 1)) * img_scale, QImage.Format_ARGB32)
-        # If there's no current token, there's no fog, just clear to background
-        # and don't leak the map
+        # If there's no fog center, there's no fog, just clear to background and
+        # prevent leaking the map dimensions
         if (fogCenter is None):
-            qim.fill(QColor(196, 196, 196))
+            qim.fill(self.fogColor)
 
         else:
+            use_fog_of_war = True
             use_svg = False
+                
             if (use_svg):
                 self.generateSVG()
                 # Use the unfogged image for svg
@@ -5262,33 +5691,36 @@ class VTTMainWindow(QMainWindow):
                 qim = QImage(pix)
             
             else:
-                
-                self.updateFog(True, False)
-
                 # Hide all DM user interface helpers
-                # XXX Hiding seems to be slow, verify? Try changing all to transparent
-                #     otherwise? Have a player and a DM scene?
+                # XXX Hiding seems to be slow, verify? Try changing all to
+                #     transparent otherwise? zValue? Have a player and a DM
+                #     scene?
                 logger.info("hiding DM ui")
                 gscene.setWallsVisible(False)
                 gscene.setDoorsVisible(False)
-                gscene.setTokensHiddenFromPlayerVisible(False)
-                logger.info("Rendering %d scene items on %dx%d image", len(gscene.items()), qim.width(), qim.height())
-                p = QPainter(qim)
-                gscene.render(p)
-                # This is necessary so the painter winds down before the pixmap
-                # below, otherwise it crashes with "painter being destroyed
-                # while in use"
-                p.end()
                 
+                if ((len(gscene.fog_polys) == 0) or (sceneSize == QSize(1,1)) or (not use_fog_of_war)):
+                    self.updateFog(True, False)
+                    gscene.setTokensVisible(False, True)
+                    logger.info("Rendering %d scene items on %dx%d image", len(gscene.items()), qim.width(), qim.height())
+                    p = QPainter(qim)
+                    gscene.render(p)
+                    # This is necessary so the painter winds down before the pixmap
+                    # below, otherwise it crashes with "painter being destroyed
+                    # while in use"
+                    p.end()
+
+                elif (use_fog_of_war):
+                    self.renderFogOfWar(qim, fog_scale, maskFormat)
+
                 # Restore all DM user interface helpers
                 logger.info("restoring DM ui")
                 gscene.setWallsVisible(self.graphicsView.drawWalls)
                 gscene.setDoorsVisible(True)
-                gscene.setTokensHiddenFromPlayerVisible(True)
+                gscene.setTokensVisible(True, True)
 
                 self.updateFog(self.graphicsView.drawMapFog, self.graphicsView.blendMapFog)
-                
-            
+
         # convert QPixmap to PNG or JPEG bytes
         # XXX This should probably be done in the http thread and cached?
         #     But needs to check pixmap affinity or pass bytes around, also
@@ -5386,7 +5818,7 @@ class VTTMainWindow(QMainWindow):
             XXX Not clear the lock is doing anything because of the batching?
             XXX Use blocksignals for this
         """
-        logger.info("sceneChanged")
+        logger.info("")
         gscene = self.gscene
         if (gscene.dirtyCount != self.sceneDirtyCount):
             self.sceneDirtyCount = gscene.dirtyCount
@@ -5401,7 +5833,6 @@ class VTTMainWindow(QMainWindow):
             # XXX Hook here the scene undo stack? (probably too noise unless
             #     filtered by time or by diffing the scene?)
 
-            
             fogCenter = gscene.getFogCenter()
             if (fogCenter is not None):
                 fogCenter = fogCenter.x(), fogCenter.y()
@@ -5439,6 +5870,8 @@ class VTTMainWindow(QMainWindow):
         if ((event.type() == QEvent.KeyPress) and (source is self.imageWidget)):
             logger.info("text %r key %d", event.text(), event.key())
             if (event.text() == "f"):
+                # XXX This should push the current zoom & pan and fit, then 
+                #     restore zoom and pan when not fitting
                 self.imageWidget.setFitToWindow(not self.imageWidget.fitToWindow)
                 self.imageWidget.update()
         

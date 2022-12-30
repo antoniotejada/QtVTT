@@ -26,6 +26,10 @@ Virtual Table Top written in Python and Qt
 
 ![image](https://user-images.githubusercontent.com/6446344/208770713-77b870b3-4588-45d0-a009-cec9ce1d8307.png)
 
+### Fog of war, display token initiative order
+
+![image](https://user-images.githubusercontent.com/6446344/210019679-b6cf5449-ef91-4268-881d-7705bc1dc030.png)
+
 
 ## Video
 
@@ -41,6 +45,10 @@ https://user-images.githubusercontent.com/6446344/205395528-095dee66-6fb8-4a85-9
 ### Scene creation, token resizing, token labeling, circular walls, documentation browsing, encounter builder, combat tracker
 
 https://user-images.githubusercontent.com/6446344/208662246-48a0f31f-b2f3-45e3-915e-3004dea4d36d.mp4
+
+### Line of sight, fog of war, light range
+
+https://user-images.githubusercontent.com/6446344/209599973-5bc5334e-0cb4-4e40-ab0f-aa14b97c793c.mp4
 
 ## Features
 
@@ -77,6 +85,9 @@ https://user-images.githubusercontent.com/6446344/208662246-48a0f31f-b2f3-45e3-9
   scene, filter monsters and add them as tokens to the current scene.
 - AD&D2E Combat tracker for rolling initiative, hit points, attacks, damages for
   the tokens in the current scene.
+- Fog of war, show faded visited areas
+- Token tooltips with hit points, AC, THAC0, etc
+- Token center label with initiative order
 
 ### HTTP server
 - Visualize player's view with line of sight
@@ -108,7 +119,7 @@ https://user-images.githubusercontent.com/6446344/208662246-48a0f31f-b2f3-45e3-9
 - Hide/Show objects (secret doors, one way walls, secret areas, fogged areas,
   etc)
 - Layers, groups, move objects closer/further
-- Light sources and illumination/fog of war/flickering/animated lights
+- Light sources and illumination/flickering/animated lights
 - Dimmed out of line of sight but previously visited places (background only,
   with no tokens)
 - Edit walls and doors
@@ -118,8 +129,7 @@ https://user-images.githubusercontent.com/6446344/208662246-48a0f31f-b2f3-45e3-9
 - Wall, door, token, image, drawing, fog zone, creation/deletion
 - Permanent drawing (spell areas, fire splash, game-clock timer areas, grids, etc)
 - Measurement tools (cone, circle, line, square)
-- Token states/stats/heading (name, size, hit points, life level, stunned,
-  game-clock timers, initiative order, current/next in combat, etc)
+- Token states/stats/heading (stunned, game-clock timers, etc)
 - Campaign/scenes management
 - Copy paste of any object
 - Text editor with markdown editing with cross links/embedded tools (scenes,
