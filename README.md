@@ -30,6 +30,10 @@ Virtual Table Top written in Python and Qt
 
 ![image](https://user-images.githubusercontent.com/6446344/210019679-b6cf5449-ef91-4268-881d-7705bc1dc030.png)
 
+### Shared and private handouts
+
+![image](https://user-images.githubusercontent.com/6446344/210111727-1c3b2dbb-aa3f-4fe4-9ca3-d237a61b59bc.png)
+
 
 ## Video
 
@@ -88,6 +92,7 @@ https://user-images.githubusercontent.com/6446344/209599973-5bc5334e-0cb4-4e40-a
 - Fog of war, show faded visited areas
 - Token tooltips with hit points, AC, THAC0, etc
 - Token center label with initiative order
+- Shared and private handouts
 
 ### HTTP server
 - Visualize player's view with line of sight
@@ -95,6 +100,8 @@ https://user-images.githubusercontent.com/6446344/209599973-5bc5334e-0cb4-4e40-a
 - Normal/Fullscreen
 - Draggable tokens with labels (just dummy for now, not sync'ed with the server)
 - SVG or HTML
+- Main page with available player views, handouts
+- Serve handouts
 
 ## Requirements
 - Python 2.7
@@ -118,10 +125,8 @@ https://user-images.githubusercontent.com/6446344/209599973-5bc5334e-0cb4-4e40-a
 - Music objects, area, fading in / out, shuffle, ordered (see https://tabletopaudio.com/)
 - Hide/Show objects (secret doors, one way walls, secret areas, fogged areas,
   etc)
-- Layers, groups, move objects closer/further
+- Layers, groups, stack objects up/down
 - Light sources and illumination/flickering/animated lights
-- Dimmed out of line of sight but previously visited places (background only,
-  with no tokens)
 - Edit walls and doors
 - Multiple floors support
 - Image/token browser
@@ -145,7 +150,6 @@ https://user-images.githubusercontent.com/6446344/209599973-5bc5334e-0cb4-4e40-a
 - AD&D2E character sheets
 - AD&D2E character creation
 - AD&D2E Party tracker (inventory, weight, treasure splitter...)
-- Sharing handouts
 - Chat
 - Video
 - 3D View with miniatures on flat or 3D map (top, ortho)
@@ -154,7 +158,6 @@ https://user-images.githubusercontent.com/6446344/209599973-5bc5334e-0cb4-4e40-a
 - Send shared view via dirty rects
 
 ### HTTP Server
-- Main page with available player views/handouts/character sheets
 - Local pointer/ephemeral drawing for signaling, etc
 - Local distance measuring
 - Local panning/zooming (won't work for 3D view/will require webgl)

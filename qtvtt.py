@@ -17,8 +17,10 @@ import random
 import re
 import SimpleHTTPServer
 import SocketServer
+import StringIO
 import sys
 import thread
+import urllib
 import zipfile
 
 
@@ -365,6 +367,20 @@ def qFindTabBarFromDockWidget(dock):
             return tabBar
 
     return None
+
+def qLaunchWithPreferredAp(filepath):
+    # pyqt5 on lxde raspbian fails to invoke xdg-open for unknown reasons and
+    # falls back to invoking the web browser instead, use xdg-open explicitly on
+    # "xcb" platforms (X11) 
+    # See https://github.com/qt/qtbase/blob/067b53864112c084587fa9a507eb4bde3d50a6e1/src/gui/platform/unix/qgenericunixservices.cpp#L129
+    if (QApplication.platformName() != "xcb"):
+        url = QUrl.fromLocalFile(filepath)
+        QDesktopServices.openUrl(url)
+        
+    else:
+        # Note there's no splitCommand in this version of Qt5, build the
+        # argument list manually
+        QProcess.startDetached("xdg-open", [filepath])
 
 class NumericTableWidgetItem(QTableWidgetItem):
     """
@@ -2248,7 +2264,7 @@ class DocBrowser(QWidget):
     
 # Image bytes (eg PNG or JPEG) between the app thread and the http server thread
 # XXX This needs to be more flexible once there are multiple images shared, etc
-img_bytes = None
+g_img_bytes = None
 # Encoding to PNG takes 4x than JPEG, use JPEG (part of http and app handshake
 # configuration)
 # XXX For consistency the html and the path should use image.jpg instead of .png
@@ -2257,21 +2273,25 @@ img_bytes = None
 #imctype = "image/png"
 imctype = "image/jpeg"
 imformat = "PNG" if imctype.endswith("png") else "JPEG"
+# XXX This is shared between the app thread and the http server thread and the
+#     app, should have some kind of locking (although most of the time it's not
+#     needed because of the GIL)
+g_handouts = []
 class VTTHTTPRequestHandler(SimpleHTTPServer.SimpleHTTPRequestHandler):
     def do_GET(self):
         if (self.path.startswith("/image.png")):
             logger.debug("get start %s", self.path)
 
-            if (img_bytes is not None):
+            if (g_img_bytes is not None):
                 logger.debug("wrapping in bytes")
-                f = io.BytesIO(img_bytes)
-                clength = len(img_bytes)
+                f = io.BytesIO(g_img_bytes)
+                clength = len(g_img_bytes)
 
             else:
-                # This can happen at application startup when img_bytes is not
+                # This can happen at application startup when g_img_bytes is not
                 # ready yet
                 # XXX Fix in some other way?
-                logger.debug("null img_bytes, sending empty")
+                logger.debug("null g_img_bytes, sending empty")
                 f = io.BytesIO("")
                 clength = 0
 
@@ -2283,6 +2303,44 @@ class VTTHTTPRequestHandler(SimpleHTTPServer.SimpleHTTPRequestHandler):
             clength = os.path.getsize("_out/fog.svg")
 
             f = open("_out/fog.svg", "rb")
+
+        elif (self.path == "/"):
+            # XXX Share character sheets when available
+            # XXX This could have some message or status or "the story until now"
+
+            # XXX The path probably needs some timestamp so it doesn't get cached?
+
+            # XXX Get this from the campaign/scene
+            title = "Title goes here"
+            
+            body_lines = []
+
+            body_lines.append("<H1>%s</H1>" % title)
+
+            # Maps
+            body_lines.append("Scenes")
+            body_lines.append("<ul>")
+            # XXX Hardcoded for the time being
+            map_name = "map"
+            map_url = "/index.html"
+            body_lines.append('<li><a href="%s">%s</a>' % (map_url, map_name))
+            body_lines.append("</ul>")
+
+            # Handouts
+            body_lines.append("Handouts")
+            # XXX This should have folders for manuals, etc
+            body_lines.append("<ul>")
+            for handout in g_handouts:
+                if (handout.shared):
+                    body_lines.append('<li><a href="%s">%s</a>' % (handout.filepath, handout.name))
+            body_lines.append("</ul>")
+            
+            html = "<html><title>%s</title><body>%s</body></html>" % (title, str.join("\n", body_lines))
+            html = html.encode('ascii', 'xmlcharrefreplace')
+            
+            f = StringIO.StringIO(html)
+            ctype = "text/html"
+            clength = len(html)
 
         elif (self.path == "/index.html"):
             # XXX This neesd updating to use fog.svg instead of image.png if
@@ -2309,8 +2367,19 @@ class VTTHTTPRequestHandler(SimpleHTTPServer.SimpleHTTPRequestHandler):
             f = open(filepath, "rb")
 
         else:
-            # Can't use super since BaseRequestHandler doesn't derive from object
-            return SimpleHTTPServer.SimpleHTTPRequestHandler.do_GET(self)
+            # Only allow the files in handouts otherwise
+            # SimpleHTTPRequestHandler would expose all the files in the
+            # directory
+            filepath = urllib.unquote(self.path[1:])
+            filepath = filepath.replace("/", os.sep)
+            if (filepath in [handout.filepath for handout in g_handouts if handout.shared]):
+                # Do a explicit call, can't use super since BaseRequestHandler
+                # doesn't derive from object
+                return SimpleHTTPServer.SimpleHTTPRequestHandler.do_GET(self)
+
+            else:
+                self.send_error(404)
+                return 
 
         self.send_response(200)
         self.send_header("Content-Length", str(clength))
@@ -3690,6 +3759,8 @@ class VTTMainWindow(QMainWindow):
         
         tree = QTreeWidget()
         self.tree = tree
+        tree.itemChanged.connect(self.treeItemChanged)
+        tree.itemActivated.connect(self.treeItemActivated)
 
         for view, title in [
             (self.tree, "Campaign"), 
@@ -3858,6 +3929,7 @@ class VTTMainWindow(QMainWindow):
         self.importTokenAct = QAction("Import &Token...", self, shortcut="ctrl+t", triggered=self.importToken)
         self.importImageAct = QAction("Import &Image...", self, shortcut="ctrl+i", triggered=self.importImage)
         self.importMusicAct = QAction("Import &Music Track...", self, shortcut="ctrl+m", triggered=self.importMusic)
+        self.importHandoutAct = QAction("Import &Handout...", self, shortcut="ctrl+h", triggered=self.importHandout)
         self.clearWallsAct = QAction("Clear All &Walls...", self, triggered=self.clearWalls)
         self.clearDoorsAct = QAction("Clear All &Doors...", self, triggered=self.clearDoors)
         self.clearFogAct = QAction("Clear &Fog of War...", self, shortcut="ctrl+f", triggered=self.clearFog)
@@ -3905,6 +3977,7 @@ class VTTMainWindow(QMainWindow):
         editMenu.addAction(self.importImageAct)
         editMenu.addAction(self.importTokenAct)
         editMenu.addAction(self.importMusicAct)
+        editMenu.addAction(self.importHandoutAct)
         editMenu.addSeparator()
         editMenu.addAction(self.cutItemAct)
         editMenu.addAction(self.copyItemAct)
@@ -4091,7 +4164,11 @@ class VTTMainWindow(QMainWindow):
         for track in scene.music:
             logger.info("Adding music track %r", track.filepath)
             self.playlist.addMedia(QMediaContent(QUrl.fromLocalFile(track.filepath)))
-        
+
+        # XXX This is shared with the server thread, should be a deep copy and
+        #     an atomic assignment
+        global g_handouts
+        g_handouts = scene.handouts
 
         self.gscene = gscene
 
@@ -4259,6 +4336,28 @@ class VTTMainWindow(QMainWindow):
             "scale" : float(self.scene.cell_diameter * img_size_in_cells[0])
         })
         self.scene.map_images.append(s)
+
+        # XXX Use something less heavy handed
+        self.setScene(self.scene, self.campaign_filepath)
+
+    def importHandout(self):
+        # XXX Make it easier to share VTT internal media (from documentation
+        #    browser, map screenshot, etc?)
+            
+        dirpath = os.path.curdir if self.campaign_filepath is None else os.path.dirname(self.campaign_filepath)
+        # XXX Get supported extensions from Qt
+        filepath, _ = QFileDialog.getOpenFileName(self, "Import Handout", dirpath, "Handouts (*.png *.jpg *.jpeg *.jfif *.webp *.pdf *.doc *.docx)")
+
+        if ((filepath == "") or (filepath is None)):
+            return
+
+        s = Struct(**{
+            # XXX Fix all the path mess for embedded assets
+            "filepath" :  os.path.relpath(filepath), 
+            "name" : os.path.basename(filepath),
+            "shared" : True,
+        })
+        self.scene.handouts.append(s)
 
         # XXX Use something less heavy handed
         self.setScene(self.scene, self.campaign_filepath)
@@ -4930,6 +5029,7 @@ class VTTMainWindow(QMainWindow):
                 map_token.hidden = False
         scene.map_images = [Struct(**map_image) for map_image in js["map_images"]]
         scene.music = [Struct(**track) for track in js.get("music", [])]
+        scene.handouts = [Struct(**handout) for handout in js.get("handouts", [])]
 
         self.setScene(scene, filepath)
 
@@ -4987,17 +5087,32 @@ class VTTMainWindow(QMainWindow):
 
         scene_item = QTreeWidgetItem(["Scene 1"])
         tree.addTopLevelItem(scene_item)
+        scene_item.setExpanded(True)
 
         scene_item.addChild(QTreeWidgetItem(["%d" % self.scene.cell_diameter]))
 
         music = getattr(self.scene, "music", [])
         folder_item = QTreeWidgetItem(["Music (%d)" % len(music)])
         scene_item.addChild(folder_item)
+        folder_item.setExpanded(True)
         for track in music:
             subfolder_item = QTreeWidgetItem(["%s" % track.name])
             subfolder_item.setData(0, Qt.UserRole, track)
 
             item = QTreeWidgetItem(["%s" % track.filepath])
+            subfolder_item.addChild(item)
+            
+            folder_item.addChild(subfolder_item)
+            
+        handouts = getattr(self.scene, "handouts", [])
+        folder_item = QTreeWidgetItem(["Handouts (%d)" % len(handouts)])
+        scene_item.addChild(folder_item)
+        folder_item.setExpanded(True)
+        for handout in handouts:
+            subfolder_item = QTreeWidgetItem(["%s%s" % ("*" if handout.shared else "", handout.name)])
+            subfolder_item.setData(0, Qt.UserRole, handout)
+            subfolder_item.setFlags(subfolder_item.flags() | Qt.ItemIsEditable)
+            item = QTreeWidgetItem(["%s" % handout.filepath])
             subfolder_item.addChild(item)
             
             folder_item.addChild(subfolder_item)
@@ -5009,7 +5124,7 @@ class VTTMainWindow(QMainWindow):
             child.setData(0, Qt.UserRole, wall)
 
             folder_item.addChild(child)
-        
+            
         folder_item = QTreeWidgetItem(["Doors (%d)" % len(self.scene.map_doors)])
         scene_item.addChild(folder_item)
         for door in self.scene.map_doors: 
@@ -5020,6 +5135,7 @@ class VTTMainWindow(QMainWindow):
 
         folder_item = QTreeWidgetItem(["Images (%d)" % len(self.scene.map_images)])
         scene_item.addChild(folder_item)
+        folder_item.setExpanded(True)
         for image in self.scene.map_images:
             subfolder_item = QTreeWidgetItem(["%s" % os.path.basename(image.filepath)])
             subfolder_item.setData(0, Qt.UserRole, image)
@@ -5033,6 +5149,7 @@ class VTTMainWindow(QMainWindow):
 
         folder_item = QTreeWidgetItem(["Tokens (%d)" % len(self.scene.map_tokens)])
         scene_item.addChild(folder_item)
+        folder_item.setExpanded(True)
         for token in self.scene.map_tokens:
             # XXX Use () for hidden and * for current token?
             subfolder_item = QTreeWidgetItem(["%s%s" % ("*" if token.hidden else "", token.name, )])
@@ -5095,6 +5212,10 @@ class VTTMainWindow(QMainWindow):
         filepaths |= set([track.filepath for track in d.get("music", [])])
         d["music"] = [vars(track) for track in d.get("music", [])]
 
+        # Collect handouts as dicts instead of Structs
+        filepaths |= set([handout.filepath for handout in d.get("handout", [])])
+        d["handouts"] = [vars(handout) for handout in d.get("handouts", [])]
+
         # Collect doors as dicts instead of Structs
         d["map_doors"] = [vars(door) for door in d["map_doors"]]
 
@@ -5151,7 +5272,7 @@ class VTTMainWindow(QMainWindow):
         ]
         d["map_images"] = images
         pixmaps.update({ image_item.data(0).filepath : image_item.pixmap() for image_item in gscene.images()})
-        
+
         # XXX This should append to whatever scenes or store each scene
         #     in a directory?
         d = { "version" : 1.0, "scenes" : [d] }
@@ -5457,10 +5578,10 @@ class VTTMainWindow(QMainWindow):
                 pix = pixItem.pixmap()
                 ok = pix.save(buff, imformat)
                 assert ok
-                img_bytes = ba.data()
+                g_img_bytes = ba.data()
                 import base64
 
-                base64_utf8_str = base64.b64encode(img_bytes).decode('utf-8')
+                base64_utf8_str = base64.b64encode(g_img_bytes).decode('utf-8')
 
                 dataurl = 'data:image/png;base64,%s' % base64_utf8_str
                 label_item = gscene.getTokenLabelItem(token_item)
@@ -5636,7 +5757,7 @@ class VTTMainWindow(QMainWindow):
 
     def updateImage(self):
         logger.info("")
-        global img_bytes
+        global g_img_bytes
         gscene = self.gscene
         fogCenter = gscene.getFogCenter()
 
@@ -5733,7 +5854,7 @@ class VTTMainWindow(QMainWindow):
         buff.open(QIODevice.WriteOnly) 
         ok = qim.save(buff, imformat)
         assert ok
-        img_bytes = ba.data()
+        g_img_bytes = ba.data()
             
         logger.info("Converting to pixmap")
         pix = QPixmap.fromImage(qim)
@@ -5754,7 +5875,52 @@ class VTTMainWindow(QMainWindow):
             )
 
         gscene.setLockDirtyCount(False)
+
+    def treeItemActivated(self, item):
+        logger.info("%s", item.text(0))
+
+        # If the tree text is an existing filename or the data has a filepath
+        # field, open it with the associated app
         
+        # XXX Initially this is a rule for handouts (name or filepath), but also
+        #     works for other scene items that have a filepath field (tokens,
+        #     images, tracks). Should check the type instead of blindly probing
+        #     for filepaths?
+        filepath = item.text(0)
+        if (not os.path.exists(filepath)):
+            filepath = getattr(item.data(0, Qt.UserRole), "filepath", None)
+            if ((filepath is not None) and (not os.path.exists(filepath))):
+                filepath = None
+
+        if (filepath is not None):
+            logger.info("Launching %r with preferred app", filepath)
+            self.showMessage("Launching %r" % filepath)
+            qLaunchWithPreferredAp(filepath)
+
+    def treeItemChanged(self, item, column):
+        logger.info("%s %d", item.text(0), column)
+        
+        # XXX This assumes the only editable items are handouts
+        # XXX Set other items as editable (eg tokens) and make this work for
+        #     them
+
+        # If the handout name starts with "*" then the handout is shareable,
+        # otherwise it's not
+        
+        # XXX This should use something nicer like a "share this handout"
+        #     context menu or editing the "shared" tree subitem
+        handout = item.data(0, Qt.UserRole)
+        handout.shared = item.text(0).startswith("*")
+
+        if (handout.shared):
+            handout.name = item.text(0)[1:]
+
+        else:
+            handout.name = item.text(0)
+        
+        # XXX Use something less heavy handed than setScene
+        self.setScene(self.scene, self.campaign_filepath)
+
     def sceneChanged(self, region):
         """
         By default sceneChanged sends changes for all non-programmatic changes
