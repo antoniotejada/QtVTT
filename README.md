@@ -34,8 +34,11 @@ Virtual Table Top written in Python and Qt
 
 ![image](https://user-images.githubusercontent.com/6446344/210111727-1c3b2dbb-aa3f-4fe4-9ca3-d237a61b59bc.png)
 
+### Editable walls
 
-## Video
+![image](https://user-images.githubusercontent.com/6446344/210600981-3d17424b-45d8-49dd-a153-a6ebdde90abf.png)
+
+## Videos
 
 
 ### Initial line of sight test
@@ -75,13 +78,13 @@ https://user-images.githubusercontent.com/6446344/209599973-5bc5334e-0cb4-4e40-a
 - Creating, loading and saving scenes (editing walls and doors not yet
   supported)
 - Creating circular walls
-- Importing images, tokens, music
-- Deleting tokens, images, walls, doors, music
+- Importing images, tokens, music, handouts
+- Deleting tokens, images, walls, doors, music, handouts
 - Cut, copy, and paste selected tokens
 - Editing token labels
 - DM fulll and view screenshots
 - HTML documentation browser with quick filter, table of contents and search
-  result navigation inside and across documents
+  result navigation intra and inter documents
 - Grid drawing
 - Snap to grid
 - Clip line of sight to different light ranges (candles, torches, etc) 
@@ -93,6 +96,7 @@ https://user-images.githubusercontent.com/6446344/209599973-5bc5334e-0cb4-4e40-a
 - Token tooltips with hit points, AC, THAC0, etc
 - Token center label with initiative order
 - Shared and private handouts
+- Edit walls
 
 ### HTTP server
 - Visualize player's view with line of sight
@@ -127,7 +131,7 @@ https://user-images.githubusercontent.com/6446344/209599973-5bc5334e-0cb4-4e40-a
   etc)
 - Layers, groups, stack objects up/down
 - Light sources and illumination/flickering/animated lights
-- Edit walls and doors
+- Edit doors
 - Multiple floors support
 - Image/token browser
 - Shared pointers and ephemeral drawing 

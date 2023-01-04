@@ -76,9 +76,9 @@ def setup_logger(logger):
 
 logger = logging.getLogger(__name__)
 setup_logger(logger)
-logger.setLevel(logging.DEBUG)
+#logger.setLevel(logging.DEBUG)
 #logger.setLevel(logging.WARNING)
-#logger.setLevel(logging.INFO)
+logger.setLevel(logging.INFO)
 
 class Struct:
     """
@@ -344,8 +344,23 @@ itemChangeToName = {
 25 : "ItemOpacityChange",
 26 : "ItemOpacityHasChanged",
 27 : "ItemScenePositionHasChanged", }
+        
 def qItemChangeToString(change):
     return itemChangeToName.get(change, str(change))
+
+class ItemChangeString:
+    """
+    Using the class instead of the function directly, prevents the conversion to
+    string when used as logging parameter, increasing performance.
+
+    This has been verified to be a win with high frequency functions like
+    itemChange/d
+    """
+    def __init__(self, change):
+        self.change = change
+
+    def __str__(self):
+        return qItemChangeToString(self.change)
 
 def qFindTabBarFromDockWidget(dock):
     logger.info("%s", dock.windowTitle())
@@ -418,7 +433,7 @@ class LinkTableWidgetItem(QTableWidgetItem):
             self.setForeground(QBrush(Qt.blue))
         # XXX Restore font & foreground if link is None?
 
-def import_ds(scene, filepath):
+def import_ds_walls(scene, filepath):
     # Load a dungeonscrawl .ds data file 
     # See https://www.dungeonscrawl.com/
     
@@ -593,13 +608,17 @@ def import_ds(scene, filepath):
                             x0, y0 = start
                             wall = (x0, y0, x1, y1)
                             # Some maps come with thousands of duplicates
+                            # XXX The duplicates were probably due to undo
+                            #     information that is being skipped nowadays?
                             # XXX Check for duplicates higher up to discard earlier?
                             #     (watch for interactions with coalescing?)
                             if (wall not in duplicates):
+                                # Convert to lists so they can be edited later 
+                                # in the application
                                 if (is_door):
-                                    door.extend(wall)
+                                    door.extend(list(wall))
                                 else:
-                                    map_walls.append(wall)
+                                    map_walls.append(list(wall))
 
                                 duplicates.add(wall)
 
@@ -627,15 +646,10 @@ def import_ds(scene, filepath):
     scene.cell_diameter = map_cell_diameter
     scene.map_walls = map_walls
     scene.map_doors = map_doors
-    scene.music = []
-
-    return scene
 
 
-def load_ds(ds_filepath, map_filepath=None, img_offset_in_cells=None):
-    scene = Struct()
-
-    import_ds(scene, ds_filepath)
+def import_ds(scene, ds_filepath, map_filepath=None, img_offset_in_cells=None):
+    import_ds_walls(scene, ds_filepath)
 
     if (map_filepath is not None):
 
@@ -668,34 +682,6 @@ def load_ds(ds_filepath, map_filepath=None, img_offset_in_cells=None):
                 # XXX This assumes homogeneous scaling, may need to use scalex,y
             })
         ]
-
-    # Create some dummy tokens for the time being
-    # XXX Remove once tokens can be imported or dragged from the token browser
-    scene.map_tokens = []
-    for filename in [
-        "Hobgoblin.png", "Hobgoblin.png", "Goblin.png" ,"Goblin.png", 
-        "Goblin.png", "Gnoll.png", "Ogre.png", "Ancient Red Dragon.png", 
-        "Knight.png", "Priest.png", "Mage.png"]:
-        map_token = Struct()
-        map_token.filepath = os.path.join("_out", "tokens", filename)
-        map_token.scene_pos = (0.0, 0.0)
-        map_token.name = os.path.splitext(filename)[0]
-        map_token.hidden = False
-        map_token.ruleset_info = Struct(**default_ruleset_info)
-        
-        pix_scale = scene.cell_diameter
-        # XXX This should check the monster size or such
-        if ("Dragon" in filename):
-            pix_scale *= 4.0
-        elif ("Ogre" in filename):
-            pix_scale *= 1.5
-
-        map_token.scale = pix_scale
-
-        scene.map_tokens.append(map_token)    
-
-    return scene
-
 
 def build_index(dirpath):
     logger.info("%r", dirpath)
@@ -1504,7 +1490,6 @@ class CombatTracker(QWidget):
         table.resizeColumnsToContents()
         table.resizeRowsToContents()
 
-
 class EncounterBuilder(QWidget):
     browseMonster = pyqtSignal(str)
     def __init__(self, parent=None):
@@ -1960,13 +1945,12 @@ class DocBrowser(QWidget):
     def returnPressed(self):
         logger.info("returnPressed modifiers 0x%x ctrl 0x%x shift 0x%x ", 
             int(qApp.keyboardModifiers()),
-            int(qApp.keyboardModifiers()) & Qt.ControlModifier,
-            int(qApp.keyboardModifiers()) & Qt.ShiftModifier
+            int(qApp.keyboardModifiers() & Qt.ControlModifier),
+            int(qApp.keyboardModifiers() & Qt.ShiftModifier)
         )
-        # PyQt complains if 0 is passed as findFlags to find, use
-        # FindCaseSensitively for no flags since QRegexp search ignores that
-        # anyway
-        findFlags = QTextDocument.FindBackward if ((int(qApp.keyboardModifiers()) & Qt.ShiftModifier) != 0) else QTextDocument.FindFlag(0)
+        # PyQt complains if 0 is passed as findFlags to find, use explicit
+        # conversion
+        findFlags = QTextDocument.FindBackward if (int(qApp.keyboardModifiers() & Qt.ShiftModifier) != 0) else QTextDocument.FindFlag(0)
 
         # Yellow the previously current position
         fmt = self.lastCursor.charFormat()
@@ -1974,7 +1958,7 @@ class DocBrowser(QWidget):
         self.lastCursor.setCharFormat(fmt)
         self.textEdit.setTextCursor(self.lastCursor)
 
-        if (((int(qApp.keyboardModifiers()) & Qt.ControlModifier) != 0) or 
+        if ((int(qApp.keyboardModifiers() & Qt.ControlModifier) != 0) or 
             (not self.textEdit.find(QRegExp(self.lastPattern, Qt.CaseInsensitive), findFlags))):
             logger.info("findFlags %d", findFlags)
             delta = 1
@@ -2273,10 +2257,11 @@ g_img_bytes = None
 #imctype = "image/png"
 imctype = "image/jpeg"
 imformat = "PNG" if imctype.endswith("png") else "JPEG"
-# XXX This is shared between the app thread and the http server thread and the
-#     app, should have some kind of locking (although most of the time it's not
-#     needed because of the GIL)
+# XXX This is shared between the app thread and the http server thread, should
+#     have some kind of locking (although most of the time it's not needed
+#     because of the GIL)
 g_handouts = []
+g_server_ips = []
 class VTTHTTPRequestHandler(SimpleHTTPServer.SimpleHTTPRequestHandler):
     def do_GET(self):
         if (self.path.startswith("/image.png")):
@@ -2328,7 +2313,10 @@ class VTTHTTPRequestHandler(SimpleHTTPServer.SimpleHTTPRequestHandler):
 
             # Handouts
             body_lines.append("Handouts")
+            # XXX There should also be campaign-level handouts that appear in
+            #     all scenes
             # XXX This should have folders for manuals, etc
+            # XXX Add thumbnails/file type icon
             body_lines.append("<ul>")
             for handout in g_handouts:
                 if (handout.shared):
@@ -2410,14 +2398,13 @@ def server_thread(arg):
     httpd = SocketServer.TCPServer(tuple(server_address), handler_class)
 
     import socket
-    global server_ips
-    server_ips = socket.gethostbyname_ex(socket.gethostname())
+    global g_server_ips
+    g_server_ips = socket.gethostbyname_ex(socket.gethostname())
     
     # XXX In case some computation is needed between requests, this can also do
     #     httpd.handle_request in a loop
     httpd.serve_forever()
 
-server_ips = []
 most_recently_used_max_count = 10
 
 class ImageWidget(QScrollArea):
@@ -2579,6 +2566,33 @@ class ImageWidget(QScrollArea):
 
         return False
 
+def load_test_tokens(cell_diameter):
+    # Create some dummy tokens for the time being
+    # XXX Remove once tokens can be imported or dragged from the token browser
+    map_tokens = []
+    for filename in [
+        "Hobgoblin.png", "Hobgoblin.png", "Goblin.png" ,"Goblin.png", 
+        "Goblin.png", "Gnoll.png", "Ogre.png", "Ancient Red Dragon.png", 
+        "Knight.png", "Priest.png", "Mage.png"][0:0]:
+        map_token = Struct()
+        map_token.filepath = os.path.join("_out", "tokens", filename)
+        map_token.scene_pos = (0.0, 0.0)
+        map_token.name = os.path.splitext(filename)[0]
+        map_token.hidden = False
+        map_token.ruleset_info = Struct(**default_ruleset_info)
+        
+        pix_scale = cell_diameter
+        # XXX This should check the monster size or such
+        if ("Dragon" in filename):
+            pix_scale *= 4.0
+        elif ("Ogre" in filename):
+            pix_scale *= 1.5
+
+        map_token.scale = pix_scale
+
+        map_tokens.append(map_token)
+
+    return map_tokens
 
 def load_test_scene():
     ds_filepath = "hidden hold.dsz"
@@ -2623,9 +2637,26 @@ def load_test_scene():
     ds_filepath = os.path.join("_out", ds_filepath)
     map_filepath = os.path.join("_out", map_filepath)
 
-    scene = load_ds(ds_filepath, map_filepath, img_offset_in_cells)
+    scene = Struct()
+    import_ds(scene, ds_filepath, map_filepath, img_offset_in_cells)
 
     return scene
+
+
+class GraphicsRectNotifyItem(QGraphicsRectItem):
+    def itemChange(self, change, value):
+        assert None is logger.debug("change %s value %s", ItemChangeString(change), value)
+        # Scene can be none before the item is added to the scene
+        if ((self.scene() is not None) and
+            # XXX This is in the hotpath of updateFog/setWallsVisible, and it's
+            #     not clear why VTTGraphicsScene.itemChanged calls updateFog
+            #     even if updates are locked in setWallsVisible, but appears in
+            #     the profiling logs
+            (change not in [QGraphicsItem.ItemZValueHasChanged, QGraphicsItem.ItemZValueChange])):
+            return self.scene().itemChanged(self, change, value)
+
+        else:
+            return super(GraphicsRectNotifyItem, self).itemChange(change, value)
 
 
 class GraphicsPixmapNotifyItem(QGraphicsPixmapItem):
@@ -2703,6 +2734,10 @@ class GraphicsPixmapNotifyItem(QGraphicsPixmapItem):
         Return parent + children boundingRect, this may give issues if any code
         assumes the center of the bounding rect matches the center of the
         pixmap, since this boundingRect includes the label bounding rect.
+
+        Also, the focus/selected rect code will use these bounds to draw the
+        dotted rectangle, so it may not be desirable to return the parent +
+        children?
         """
         
         rect = super(GraphicsPixmapNotifyItem, self).boundingRect()
@@ -2711,7 +2746,7 @@ class GraphicsPixmapNotifyItem(QGraphicsPixmapItem):
         return rect
 
     def itemChange(self, change, value):
-        logger.debug("change %s value %s", qItemChangeToString(change), value)
+        logger.debug("change %s value %s", ItemChangeString(change), value)
         # Scene can be none before the item is added to the scene
         if (self.scene() is not None):
             return self.scene().itemChanged(self, change, value)
@@ -2727,12 +2762,13 @@ class VTTGraphicsScene(QGraphicsScene):
         self.doorItems = set()
         self.openDoorItems = set()
         self.wallItems = set()
+        self.wallHandleItems = set()
         self.imageItems = set()
         self.map_scene = map_scene
 
         self.blendFog = False
         self.fogVisible = False
-        self.lockDirtyCount = False
+        self.lockDirtyCount = 0
         self.dirtyCount = 0
         self.fogPolysDirtyCount = -1
 
@@ -2765,35 +2801,80 @@ class VTTGraphicsScene(QGraphicsScene):
         # Ignore dirty calls from inside fog updating to prevent infinite
         # recursion
         # XXX Not clear this really works because scene changes are batched
-        if (not self.lockDirtyCount):
+        if (not self.dirtyCountIsLocked()):
             self.dirtyCount += 1
 
+    def dirtyCountIsLocked(self):
+        return (self.lockDirtyCount > 0)
+
     def setLockDirtyCount(self, locked):
-        self.lockDirtyCount = locked
+        self.lockDirtyCount += 1 if locked else -1
+        assert self.lockDirtyCount >= 0
+
+    def setWallHandlePos(self, wallHandle, pos):
+        """
+        Update the twins to the wall handle position
+        """
+        wallHandle.setPos(pos)
+        p = wallHandle.pos()
+        wallItem = wallHandle.data(0)
+        wallItem2 = wallHandle.data(1)
+        scene = self.map_scene
+        # wallitem2 is the twin of this wall, ie the other wall that shares this
+        # handle, update the p2 of that wall's line
+        if (wallItem2 is not None):
+            # This is the p2 handle
+            i = wallItem2.data(0)
+            wall2 = scene.map_walls[i]
+            wall2[2:4] = [p.x(), p.y()]
+            wallItem2.setLine(*wall2)
+            
+        # wallitem will be None if this wall doesn't have a twin, ie it's the
+        # end segment of a wall, otherwise update the p1 of this wall's line
+        if (wallItem is not None):
+            # This is the p1 handle
+            i = wallItem.data(0)
+            wall = scene.map_walls[i]
+            wall[0:2] = [p.x(), p.y()]
+            wallItem.setLine(*tuple(wall))
+
+        # Clear fog of war since changing the walls makes fog of war
+        # (acumulated fogs) look funny
+        self.fog_mask = None
+
 
     def itemChanged(self, item, change, value):
         """
-        This receives notifications from GraphicsPixmapNotifyItem
+        This receives notifications from GraphicsPixmapNotifyItem/GraphicsRectNotifyItem
         """
-        logger.info("change %s", qItemChangeToString(change))
+        logger.debug("change %s", ItemChangeString(change))
         
         if ((change == QGraphicsItem.ItemPositionChange) and self.snapToGrid):
             # value is the new position, snap 
             snap_granularity = self.cellDiameter / 2.0
+            if (int(qApp.keyboardModifiers() & Qt.ShiftModifier) != 0):
+                snap_granularity /= 10.0
             snap_pos = (value / snap_granularity).toPoint() * snap_granularity
+            logger.info("Snapping %s to %s", qtuple(value), qtuple(snap_pos))
 
             return snap_pos
         
         if (change == QGraphicsItem.ItemPositionHasChanged):
-            item.data(0).scene_pos = qtuple(item.scenePos())
+            if (self.isToken(item)):
+                item.data(0).scene_pos = qtuple(item.scenePos())
 
+            elif (self.isWallHandle(item)):
+                # Position has already been updated, just pass current position
+                # to update the twins
+                self.setWallHandlePos(item, item.pos())
+                
         if (change in [
             QGraphicsItem.ItemVisibleHasChanged, 
             QGraphicsItem.ItemPositionHasChanged,
             # Need to update fog if the focus changes
             QGraphicsItem.ItemSelectedHasChanged,
             ]):
-            if (not self.lockDirtyCount):
+            if (not self.dirtyCountIsLocked()):
                 self.makeDirty()
                 if (self.getFogCenter() is not None):
                     self.updateFog()
@@ -2856,10 +2937,16 @@ class VTTGraphicsScene(QGraphicsScene):
         return list(self.imageItems)[index]
 
     def isWall(self, item):
-        return (item in self.imageItems)
+        return (item in self.wallItems)
     
     def walls(self):
         return self.wallItems
+
+    def isWallHandle(self, item):
+        return (item in self.wallHandleItems)
+
+    def wallHandles(self):
+        return self.wallHandleItems
 
     def isDoor(self, item):
         return item in self.doorItems
@@ -2906,6 +2993,19 @@ class VTTGraphicsScene(QGraphicsScene):
         item.data(0).hidden = hidden
 
     def setWallsVisible(self, visible):
+        # setWallsVisible is called as part of updatefog, which is called when
+        # moving the wall handles, don't do setVisible on them since they will
+        # lose the focus and abort dragging, push them back instead (in
+        # addition, not calling setVisible also fixes an infinite loop because
+        # itemChanged reacts to visiblechanged, but this could be fixed ignoring
+        # those for wall handles)
+        
+        # setZValue generate itemChange on each, lock updates for those and
+        # update at the end
+        self.setLockDirtyCount(True)
+        for handle in self.wallHandleItems:
+            handle.setZValue(0.3 if visible else -1)
+        self.setLockDirtyCount(False)
         self.makeDirty()
         self.allWallsItem.setVisible(visible)
     
@@ -2976,7 +3076,9 @@ class VTTGraphicsScene(QGraphicsScene):
         # XXX This is not really token geometry, but it centralizes the tooltip
         #     update when the label is updated or when any other stat is updated
         #     in the CombatTracker, etc
-        pixItem.setToolTip("<b>" + map_token.name + "</b>" + "<br><b>T0</b>:%s <b>AT</b>:%s <b>D</b>:%s<br><b>AC</b>:%s <b>HP</b>:%s" %(
+        pixItem.setToolTip("<b>%s</b><br><i>%s</i><br><b>T0</b>:%s <b>AT</b>:%s <b>D</b>:%s<br><b>AC</b>:%s <b>HP</b>:%s" %(
+            map_token.name,
+            map_token.ruleset_info.Id,
             map_token.ruleset_info.T0,
             map_token.ruleset_info.AT,
             map_token.ruleset_info.Damage,
@@ -3049,17 +3151,77 @@ class VTTGraphicsScene(QGraphicsScene):
     def getTokenLabelItem(self, token):
         return token.childItems()[0]
 
-    def addWall(self, map_wall):
+    def addWall(self, map_wall, index):
         logger.info("Adding wall %s", map_wall)
         pen = QPen(Qt.cyan)
-        item = QGraphicsLineItem(*map_wall)
-        # Items cannot be selected, moved or focused while inside a group,
-        # the group can be selected and focused but not moved
-        item.setFlags(QGraphicsItem.ItemIsFocusable | QGraphicsItem.ItemIsSelectable)
-        item.setPen(pen)
-        item.setData(0, map_wall)
-        self.wallItems.add(item)
-        self.allWallsItem.addToGroup(item)
+        wallItem = QGraphicsLineItem(*map_wall)
+        # Items cannot be selected, moved or focused while inside a group, the
+        # group can be selected and focused but not moved
+        ##item.setFlags(QGraphicsItem.ItemIsFocusable | QGraphicsItem.ItemIsSelectable  | QGraphicsItem.ItemIsMovable)
+        wallItem.setPen(pen)
+        # XXX Can't store a list since the reference is lost when doing setData
+        #     and the one recovered with .data() is different (verified eg by
+        #     id()). Store a struct in the future?
+        wallItem.setData(0, index)
+        self.wallItems.add(wallItem)
+        self.allWallsItem.addToGroup(wallItem)
+
+        handleDiameter = self.cellDiameter * 0.1
+        handleItems = []
+        for i, handlePos in enumerate([map_wall[0:2], map_wall[2:4]]):
+            # QGraphicsRectItem handles position and the rect topleft
+            # independently, use the topleft to offset the rectangle so the
+            # position matches the center
+            handleItem = GraphicsRectNotifyItem(-handleDiameter*0.5, -handleDiameter*0.5, handleDiameter, handleDiameter)
+            handleItem.setPos(QPointF(*handlePos))
+            handleItem.setFlags(QGraphicsItem.ItemIsFocusable | QGraphicsItem.ItemIsSelectable | QGraphicsItem.ItemIsMovable | QGraphicsItem.ItemSendsScenePositionChanges)
+            handleItem.setPen(pen)
+            handleItem.setData(i, wallItem)
+            handleItem.setZValue(0.3)
+            handleItem.setCursor(Qt.SizeAllCursor)
+            self.addItem(handleItem)
+            self.wallHandleItems.add(handleItem)
+            handleItems.append(handleItem)
+
+        # Find twin (the other wall that shares p1 of this wall), register twin,
+        # remove handle from twin
+        
+        # XXX This twin finding is brittle and known to fail with joints with >
+        #     2 walls (handles will be missing, wrong points may be joined),
+        #     change wall to struct of polylines so the adjacency information is
+        #     not lost when importing/editing. Alternatively find a heuristic
+        #     and a fix.
+
+        # Find the handle for twin that shares p1 and remove it. May be None if
+        # this is a start point or if the twin hasn't been created yet
+        wall = map_wall
+        for handleItem2 in self.wallHandleItems:
+            wallItem2 = handleItem2.data(1)
+            if (wallItem2 is None):
+                continue
+            wall2 = self.map_scene.map_walls[wallItem2.data(0)]
+            if ((wall is not wall2) and (wall[0:2] == wall2[2:4])):
+                logger.info("found p1 twin")
+                self.removeItem(handleItem2)
+                self.wallHandleItems.remove(handleItem2)
+                handleItems[0].setData(1, wallItem2)
+                break
+
+        # Find the handle for the twin that shares p2 and remove this handle.
+        # May be None if this is an end point or if the twin hasn't been created
+        # yet
+        for handleItem2 in self.wallHandleItems:
+            wallItem2 = handleItem2.data(0)
+            if (wallItem2 is None):
+                continue
+            wall2 = self.map_scene.map_walls[wallItem2.data(0)]
+            if ((wall is not wall2) and (wall[2:4] == wall2[0:2])):
+                logger.info("Found p2 twin")
+                self.removeItem(handleItems[1])
+                self.wallHandleItems.remove(handleItems[1])
+                handleItem2.setData(1, wallItem)
+                break
+
         
     def addDoor(self, map_door):
         logger.info("Adding door %s", map_door.lines)
@@ -3121,6 +3283,24 @@ class VTTGraphicsScene(QGraphicsScene):
 
     def getLightRange(self):
         return self.lightRange
+
+    def getLightRanges(self):
+        # Light ranges in feet, no need to sort these, they get sorted below
+        d = [ 
+            ("None", 0.0), ("candle", 5.0), ("torch", 15.0), 
+            ("light spell", 20.0), ("lantern", 30.0), ("campfire", 35.0),
+            ("infravision", 60.0),
+        ]
+        # Return light ranges in scene units
+        # XXX Assumes 5ft per cell, lightRange uses scene units
+        lightRanges = [(i[0], i[1] * self.getCellDiameter() / 5.0) for i in sorted(d, cmp= lambda a,b : cmp(a[1], b[1]))]
+
+        return lightRanges
+
+    def getLightRangeName(self, lightRange):
+        lightRanges = self.getLightRanges()
+        i = index_of([l[1] for l in lightRanges], lightRange)
+        return lightRanges[i][0]
         
     def setFogVisible(self, visible):
         logger.info("setFogVisible %s", visible)
@@ -3160,7 +3340,6 @@ class VTTGraphicsScene(QGraphicsScene):
             
             token_pos = self.getFogCenter()
             token_x, token_y = qtuple(token_pos)
-            # XXX This assumes 60ft vision and 5ft per cell, allow configuring
             fog_polys = compute_fog(self.map_scene, (token_x, token_y), self.lightRange, self.sceneRect())
             self.fog_polys = fog_polys
 
@@ -3193,6 +3372,10 @@ class VTTGraphicsScene(QGraphicsScene):
 
         
 def compute_fog(scene, fog_center, light_range, bounds):
+    # XXX Investigate 
+    #       token_x, token_y = 918, 648 
+    #       wall = 910.8699293051828, 648.5932296062014, 920.3038924799687, 641.7909349343238
+    #     The token is under the wall but the fog is calculated as if above?
     logger.info("draw fog %d polys pos %s", len(scene.map_walls), fog_center)
     
     token_x, token_y = fog_center
@@ -3217,6 +3400,20 @@ def compute_fog(scene, fog_center, light_range, bounds):
             x0, y0 = x1, y1
 
     light_range2 = light_range ** 2
+    
+    # Include the light rectangle centered in the token since it can place walls
+    # outside the current bounds, otherwise the bound clipping would interfere
+    # with the fake circle wall and invert the fog
+    
+    # XXX Probably something more efficient could be done like clipping the wall
+    #     against the bounds, or this can be removed once lightranges are
+    #     implemented by clearing the fog mask. In addition, this causes stale
+    #     rendering artifacts when using the "blend fog" debugging option since
+    #     the graphicsscene doesn't expect drawing outside of the sceneRect. 
+    epsilon = 10.0
+    bounds = bounds.united(
+        QRectF(token_x - light_range - epsilon, token_y - light_range - epsilon, 
+            (light_range + epsilon)*2, (light_range + epsilon)*2))
 
     max_min_l = (bounds.width() ** 2 + bounds.height() ** 2)
     for map_item in scene.map_walls + scene.map_doors + light_walls:
@@ -3244,8 +3441,8 @@ def compute_fog(scene, fog_center, light_range, bounds):
             
             # Clip the frustum to the scene bounds, this prevents having to use
             # a large frustum which will cause large polygons to be rendered
-            # (slow) and doesn't work for degenerate cases like very close to a
-            # wall where the frustum is close to 180 degrees
+            # (slow) and which doesn't work anyway for degenerate cases like
+            # very close to a wall where the frustum is close to 180 degrees
             min_ls = []
             hits = []
             hitmasks = []
@@ -3303,6 +3500,7 @@ def compute_fog(scene, fog_center, light_range, bounds):
                 pass
 
             else:
+                # XXX All this could be put into a table
                 
                 mask = (1 << hits[0]) | (1 << hits[1])
                 # Frustum intersects adjacent bounds, insert one corner
@@ -3346,7 +3544,7 @@ def compute_fog(scene, fog_center, light_range, bounds):
 
                     if (hits[0] == 3):
                         # Reverse direction, swap
-                        frustum[2], frustum[3] = frustum[3], frustum[2]      
+                        frustum[2], frustum[3] = frustum[3], frustum[2]
 
             fog_polys.append(frustum)
                 
@@ -3430,10 +3628,8 @@ class VTTGraphicsView(QGraphicsView):
                     scenePos.y() + r*math.sin(2.0 * s * math.pi / sides)
                 )
                 if (x0 is not None):
-                    wall = (x0, y0, x1, y1)
-                    # XXX Missing adding to the main scene, this should be
-                    #     passing the main scene wall tuple, not this one
-                    gscene.addWall(wall)
+                    wall = [x0, y0, x1, y1]
+                    gscene.addWall(wall, len(gscene.map_scene.map_walls))
                     gscene.map_scene.map_walls.append(wall)
                                         
                 x0, y0 = x1, y1
@@ -3462,11 +3658,8 @@ class VTTGraphicsView(QGraphicsView):
         delta = newPos - oldPos
         self.translate(delta.x(), delta.y())
         
-        # Prevent propagation, not enough with returning True below
+        # Prevent propagation
         event.accept()
-            
-        #else:
-        #    super(VTTGraphicsView, self).mouseMoveEvent(event)
 
     def event(self, event):
         logger.info("event 0x%x", event.type())
@@ -3474,11 +3667,24 @@ class VTTGraphicsView(QGraphicsView):
         # keyPressEvent
         gscene = self.scene()
         if ((event.type() == QEvent.KeyPress) and (event.key() in [Qt.Key_Tab, Qt.Key_Backtab]) and 
-            ((int(event.modifiers()) & Qt.ControlModifier) == 0)):
+            (int(event.modifiers() & Qt.ControlModifier) == 0)):
 
-            tokens = list(gscene.tokens())
-            tokenCount = len(tokens)
-            if (tokenCount > 0):
+            focusItem = gscene.focusItem()
+
+            # Tab through wall handles if the focused item is a wall handle,
+            # otherwise tab through tokens
+            if (gscene.isWallHandle(focusItem) or (len(gscene.tokens()) == 0)):
+                # XXX sets have no order, this is not very useful without some
+                #     order since it goes to some random handle, not to the 
+                #     closest one
+                items = list(gscene.wallHandles())
+
+            else:
+                items = list(gscene.tokens())
+
+            
+            itemCount = len(items)
+            if (itemCount > 0):
                 delta = 1 if (event.key() == Qt.Key_Tab) else -1
                 # XXX Note token_items is a set, so it doesn't preserve the
                 #     order, may not be important since it doesn't matter
@@ -3488,16 +3694,16 @@ class VTTGraphicsView(QGraphicsView):
                 # XXX Should probably override GraphicsView.focusNextPrevChild
                 #     once moving away from filtering?
                 
-                focusedIndex = index_of(tokens, gscene.focusItem())
+                focusedIndex = index_of(items, gscene.focusItem())
                 if (focusedIndex == -1):
                     # Focus the first or last item
-                    focusedIndex = tokenCount
+                    focusedIndex = itemCount
                 else:
                     # Clear the selection rectangle on the old focused item
-                    tokens[focusedIndex].setSelected(False)
+                    items[focusedIndex].setSelected(False)
 
-                focusedIndex = (focusedIndex + delta) % tokenCount
-                focusedItem = tokens[focusedIndex]
+                focusedIndex = (focusedIndex + delta) % itemCount
+                focusedItem = items[focusedIndex]
                 
                 gscene.setFocusItem(focusedItem)
                 # Select so the dashed rectangle is drawn around
@@ -3514,91 +3720,99 @@ class VTTGraphicsView(QGraphicsView):
         logger.info("%s", event)
 
         gscene = self.scene()
-        if (gscene.isToken(gscene.focusItem()) and (event.key() in [Qt.Key_Left, Qt.Key_Right, Qt.Key_Up, Qt.Key_Down])):
+        if ((gscene.isToken(gscene.focusItem()) or gscene.isWallHandle(gscene.focusItem())) and 
+            (event.key() in [Qt.Key_Left, Qt.Key_Right, Qt.Key_Up, Qt.Key_Down])):
             d = { Qt.Key_Left : (-1, 0), Qt.Key_Right : (1, 0), Qt.Key_Up : (0, -1), Qt.Key_Down : (0, 1)}
             # Snap to half cell and move in half cell increments
             # XXX Make this configurable
             # XXX This assumes snapping starts at 0,0
             # XXX Keep track of the "heading" (even if there's a collision),
             #     could even be shown on the token and will with which door to
-            #     open/close when there are multiple adjacent doors
+            #     open/close when there are multiple adjacent doors    
             snap_granularity = gscene.getCellDiameter() / 2.0
+            if (int(event.modifiers() & Qt.ShiftModifier) != 0):
+                snap_granularity /= 10.0
             move_granularity = snap_granularity
             delta = QPointF(*d[event.key()]) * move_granularity
             focusItem = gscene.focusItem()
-
+            
             # Note when the token is a group, the children are the one grabbed,
             # not the group, use the focusitem which is always the group
 
-            # snap then move
+            if (gscene.isWallHandle(focusItem)):
+                # There's no need to check for collision for wall handles, just
+                # snap after moving and update the handle
+                snap_pos = ((focusItem.pos() + delta) / snap_granularity).toPoint() * snap_granularity
+                gscene.setWallHandlePos(focusItem, snap_pos)
 
-            # The token item position is offseted so the token appears centered
-            # in its position in the map. Take the size of the token into
-            # account when calculating the position in the cell
-            
-            snap_pos = (focusItem.pos() / snap_granularity).toPoint() * snap_granularity
-            
-            # Snap in case it wasn't snapped before, this will also allow using
-            # the arrow keys to snap to the current cell if the movement is
-            # rejected below
-            
-            # Note QSizeF doesn't operate with QPoint, convert to tuple and back
-            # to QPoint
-            # The center of the cell needs to be the center of the 
-            focusItem.setPos(snap_pos)
-
-            # Intersect the path against the existing walls and doors, abort
-            # the movement if it crosses one of those
-
-            # Use a bit of slack to avoid getting stuck in the intersection
-            # point due to floating point precision issues, don't use too much
-            # (eg. 1.5 or more) or it will prevent from walking through tight
-            # caves
-            
-            # XXX Note this doesn't take the size into account, can get tricky
-            #     for variable size tokens, since proper intersection
-            #     calculation requires capsule-line intersections
-            l = QLineF(snap_pos, snap_pos + delta * 1.10)
-
-            # Note walls are lines, not polys so need to check line to line
-            # intersection instead of poly to line. Even if that wasn't the
-            # case, PolygonF.intersect is new in Qt 5.10 which is not available
-            # on this installation, so do only line to line intersection
-            i = QLineF.NoIntersection
-            for wall_item in gscene.walls():
-                i = l.intersect(wall_item.line(), None)
-                ll = wall_item.line()
-                logger.debug("wall intersection %s %s is %s", l, ll, i)
-                
-                if (i == QLineF.BoundedIntersection):
-                    logger.debug("Aborting token movement, found wall intersection %s between %s and %s", i, l, ll)
-                    break
             else:
-                # Check closed doors
-                # XXX intersects is not on this version of Qt (5.10), roll
-                #     manual checks
-                for door_item in gscene.doors():
-                    if (gscene.isDoorOpen(door_item)):
-                        continue
-                    p0 = door_item.polygon().at(0)
-                    # XXX This could early discard doors that are too far
-                    #     away/don't intersect the bounding box, etc
-                    for p in door_item.polygon():
-                        ll = QLineF(p0, p)
-                        i = l.intersect(ll, None)
-                        logger.debug("door intersection %s %s is %s", l, ll, i)
-                        
-                        if (i == QLineF.BoundedIntersection):
-                            logger.debug("Aborting token movement, found door intersection %s between %s and %s", i, l, ll)
-                            break
-                        p0 = p
+                # snap then move
+
+                # Snap in case it wasn't snapped before, this will also allow using
+                # the arrow keys to snap to the current cell if the movement is
+                # rejected below
+                snap_pos = (focusItem.pos() / snap_granularity).toPoint() * snap_granularity
+                
+                focusItem.setPos(snap_pos)
+                # Intersect the path against the existing walls and doors, abort
+                # the movement if it crosses one of those
+
+                # Use a bit of slack to avoid getting stuck in the intersection
+                # point due to floating point precision issues, don't use too much
+                # (eg. 1.5 or more) or it will prevent from walking through tight
+                # caves
+                
+                # XXX Note this doesn't take the size into account, can get tricky
+                #     for variable size tokens, since proper intersection
+                #     calculation requires capsule-line intersections
+                
+                # XXX This doesn't guarantee that there's a given separation between
+                #     token and wall, eg by moving the token vertically, it could
+                #     start moving parallel to a vertical wall that is just at the
+                #     token position (since moving vertically won't collide against 
+                #     vertical walls unless they are completely edge on). Needs to
+                #     check distance to line or similar?
+                l = QLineF(snap_pos, snap_pos + delta * 1.25)
+
+                # Note walls are lines, not polys so need to check line to line
+                # intersection instead of poly to line. Even if that wasn't the
+                # case, PolygonF.intersect is new in Qt 5.10 which is not available
+                # on this installation, so do only line to line intersection
+                i = QLineF.NoIntersection
+                for wall_item in gscene.walls():
+                    i = l.intersect(wall_item.line(), None)
+                    ll = wall_item.line()
+                    logger.debug("wall intersection %s %s is %s", qtuple(l), qtuple(ll), i)
+                    
                     if (i == QLineF.BoundedIntersection):
+                        logger.debug("Aborting token movement, found wall intersection %s between %s and %s", i, qtuple(l), qtuple(ll))
                         break
                 else:
-                    # Set the token corner so the token is centered on the
-                    # position in the map
-                    focusItem.setPos(snap_pos + delta)
-                    
+                    # Check closed doors
+                    # XXX intersects is not on this version of Qt (5.10), roll
+                    #     manual checks
+                    for door_item in gscene.doors():
+                        if (gscene.isDoorOpen(door_item)):
+                            continue
+                        p0 = door_item.polygon().at(0)
+                        # XXX This could early discard doors that are too far
+                        #     away/don't intersect the bounding box, etc
+                        for p in door_item.polygon():
+                            ll = QLineF(p0, p)
+                            i = l.intersect(ll, None)
+                            logger.debug("door intersection %s %s is %s", l, ll, i)
+                            
+                            if (i == QLineF.BoundedIntersection):
+                                logger.debug("Aborting token movement, found door intersection %s between %s and %s", i, l, ll)
+                                break
+                            p0 = p
+                        if (i == QLineF.BoundedIntersection):
+                            break
+                    else:
+                        # Set the token corner so the token is centered on the
+                        # position in the map
+                        focusItem.setPos(snap_pos + delta)
+                        
             self.ensureVisible(focusItem, self.width()/4.0, self.height()/4.0)
             # Note programmatic setpos doesn't trigger itemchange, dirty the 
             # scene so the fog polygons are recalculated on the next updateFog
@@ -3678,18 +3892,11 @@ class VTTGraphicsView(QGraphicsView):
 
             elif (event.text() in ["l", "L"]):
                 # Cycle through light ranges
-                # No need to sort these, they get sorted below
-                d = { 
-                    "None" : 0.0, "candle" : 5.0, "torch" : 15.0, 
-                    "light spell" : 20.0, "lantern" : 30.0, "campfire" : 35.0,
-                    "infravision" : 60.0,
-                }
-                # XXX Assumes 5ft per cell, lightRange uses scene units
-                sortedValues = [i * gscene.getCellDiameter() / 5.0 for i in sorted(d.values())]
                 delta = 1 if event.text() == "l" else -1
-                lightRangeIndex = index_of(sortedValues, gscene.getLightRange())
-                lightRangeIndex = (lightRangeIndex + delta + len(sortedValues)) % len(sortedValues)
-                lightRange = sortedValues[lightRangeIndex]
+                lightRanges = gscene.getLightRanges()
+                lightRangeIndex = index_of([l[1] for l in lightRanges], gscene.getLightRange())
+                lightRangeIndex = (lightRangeIndex + delta + len(lightRanges)) % len(lightRanges)
+                lightRange = lightRanges[lightRangeIndex][1]
                 gscene.setLightRange(lightRange)
                 # XXX This needs to update the status bar
                 
@@ -3765,7 +3972,7 @@ class VTTMainWindow(QMainWindow):
         for view, title in [
             (self.tree, "Campaign"), 
             # XXX Once multiple scenes/rooms are supported, these two should be dynamic
-            (self.imageWidget, "Player View - %s" % (server_ips,) ),
+            (self.imageWidget, "Player View - %s" % (g_server_ips,) ),
             (self.graphicsView, "DM View"),
         ]:
             self.wrapInDockWidget(view, title)
@@ -3910,7 +4117,6 @@ class VTTMainWindow(QMainWindow):
     def createActions(self):
         self.newAct = QAction("&New", self, shortcut="ctrl+n", triggered=self.newScene)
         self.openAct = QAction("&Open...", self, shortcut="ctrl+o", triggered=self.openScene)
-        self.importDsAct = QAction("Import &Dungeon Scrawl...", self, triggered=self.importDs)
         self.saveAct = QAction("&Save", self, shortcut="ctrl+s", triggered=self.saveScene)
         self.saveAsAct = QAction("Save &As...", self, shortcut="ctrl+shift+s", triggered=self.saveSceneAs)
         self.exitAct = QAction("E&xit", self, shortcut="alt+f4", triggered=self.close)
@@ -3926,6 +4132,7 @@ class VTTMainWindow(QMainWindow):
         self.copyItemAct = QAction("&Copy Item", self, shortcut="ctrl+c", triggered=self.copyItem)
         self.pasteItemAct = QAction("&Paste Item", self, shortcut="ctrl+v", triggered=self.pasteItem)
         self.deleteItemAct = QAction("&Delete Item", self, shortcut="del", triggered=self.deleteItem)
+        self.importDungeonScrawlAct = QAction("Import &Dungeon Scrawl...", self, shortcut="ctrl+a", triggered=self.importDungeonScrawl)
         self.importTokenAct = QAction("Import &Token...", self, shortcut="ctrl+t", triggered=self.importToken)
         self.importImageAct = QAction("Import &Image...", self, shortcut="ctrl+i", triggered=self.importImage)
         self.importMusicAct = QAction("Import &Music Track...", self, shortcut="ctrl+m", triggered=self.importMusic)
@@ -3962,8 +4169,6 @@ class VTTMainWindow(QMainWindow):
         fileMenu.addSeparator()
         fileMenu.addAction(self.openAct)
         fileMenu.addSeparator()
-        fileMenu.addAction(self.importDsAct)
-        fileMenu.addSeparator()
         fileMenu.addAction(self.saveAct)
         fileMenu.addAction(self.saveAsAct)
         fileMenu.addSeparator()
@@ -3974,6 +4179,7 @@ class VTTMainWindow(QMainWindow):
         fileMenu.addAction(self.profileAct)
         
         editMenu = QMenu("&Edit", self)
+        editMenu.addAction(self.importDungeonScrawlAct)
         editMenu.addAction(self.importImageAct)
         editMenu.addAction(self.importTokenAct)
         editMenu.addAction(self.importMusicAct)
@@ -4245,8 +4451,6 @@ class VTTMainWindow(QMainWindow):
             self.pr = cProfile.Profile()
             self.pr.enable()
             
-            
-            
         self.profiling = not self.profiling
 
     def newScene(self):
@@ -4260,9 +4464,72 @@ class VTTMainWindow(QMainWindow):
         scene.map_tokens = []
         scene.map_images = []
         scene.music = []
+        scene.handouts = []
 
         self.setScene(scene)
 
+    def importDungeonScrawl(self):
+        # XXX This overwrites the current walls and image, should warn if
+        #     there's more than one image or the image filepath mismatches the
+        #     final filepath?
+
+        # Get the ds filename
+        dirpath = os.path.curdir if self.campaign_filepath is None else self.campaign_filepath
+        filepath, _ = QFileDialog.getOpenFileName(self, "Import Dungeon Scrawl data file", dirpath, "Dungeon Scrawl (*.ds)")
+
+        if (filepath == ""):
+            filepath = None
+
+        if (filepath is None):
+            return
+
+        ds_filepath = filepath
+
+        # Try to load a similarly name and dated png, otherwise ask for the png
+        # filename
+        l = os.listdir(os.path.dirname(ds_filepath))
+        map_filepath = None
+        prefix = os.path.splitext(os.path.basename(ds_filepath))[0]
+        for filename in l:
+            if (filename.startswith(prefix) and filename.endswith(".png")):
+                this_filepath = os.path.join(os.path.dirname(ds_filepath), filename)
+                logger.info("Found png candidate %r", this_filepath)
+                if ((map_filepath is None) or 
+                    # There can be multiple revisions of the png file with
+                    # different cell sizes or (n) suffix from downloading with
+                    # the browser, pick the one that has the date closest to the
+                    # ds file
+                    (
+                     abs(os.path.getmtime(this_filepath) - os.path.getmtime(ds_filepath)) < 
+                     abs(os.path.getmtime(map_filepath) - os.path.getmtime(ds_filepath))
+                    )
+                ):
+                    logger.info("Keeping better matched %r than %r", map_filepath, map_filepath)
+                    map_filepath = this_filepath
+
+        if (map_filepath is None):
+            dirpath = os.path.curdir if self.campaign_filepath is None else self.campaign_filepath
+            filepath, _ = QFileDialog.getOpenFileName(self, "Import Dungeon Scrawl battlemap", dirpath, "PNG file (*.png)")
+
+            if (filepath == ""):
+                filepath = None
+
+            map_filepath = filepath
+
+        # Copy the png to the output dir for the time being so the qvt file
+        # is not left with a file pointing eg to some download directory
+        # XXX This won't be necessary once assets are properly embedded in the qvt
+        if (map_filepath is not None):
+            copy_filepath = os.path.join("_out", os.path.basename(map_filepath))
+            # Don't try to copy to itself, it would create a zero sized file
+            if (os.path.normpath(os_path_abspath(map_filepath)) != os.path.normpath(os_path_abspath(copy_filepath))):
+                os_copy(map_filepath, copy_filepath)
+                map_filepath = copy_filepath
+
+        # Note the map filepath can be none if they decided to load only walls 
+        import_ds(self.scene, ds_filepath, map_filepath)
+        
+        self.setScene(self.scene, self.campaign_filepath)
     
     def importToken(self):
         dirpath = os.path.curdir if self.campaign_filepath is None else os.path.dirname(self.campaign_filepath)
@@ -4394,9 +4661,49 @@ class VTTMainWindow(QMainWindow):
                 # XXX Copy JSON MIME?
                 map_token = item.data(0)
                 map_tokens.append(map_token)
+            # XXX This only supports tokens
             js = json.dumps({ "tokens" :  map_tokens, "cell_diameter" : self.scene.cell_diameter }, indent=2, cls=JSONStructEncoder)
             logger.info("Copied to clipboard %s", js)
             qApp.clipboard().setText(js)
+
+        else:
+            # Copy as HTML
+            # XXX Probably move to some table "export as HTML" menu?
+            widget = self.focusWidget()
+            if (isinstance(widget, VTTTableWidget)):
+                table = widget
+                if (isinstance(table.parent(), CombatTracker)):
+                    tracker = table.parent()
+                    # Note Trilium needs <html><body>  </body></html> bracketing
+                    # or it won't recognize the html format (pasting onto Qt
+                    # textedit doesn't need it, but it could be using OLE data?)
+                    htmlLines = ["<html><body><table><thead style=\"background-color: black; color: white; weight:bold;\"><tr>"]
+
+                    headers = [
+                        # XXX Missing "XP", 
+                        "Name", "HD", "HP", "HP_", "AC", "MR", "T0", "#AT", 
+                        "Damage", "Alignment"
+                    ]
+                    for header in headers:
+                        # Note QTextEdit uses white on white as header color, so
+                        # these won't be visible there
+                        htmlLines.append("<th>%s</th>" % header)
+                    htmlLines.append("</tr></thead><tbody>")
+
+                    for j in xrange(table.rowCount()):
+                        # XXX Check this row is selected or no rows are selected
+                        htmlLines.append("<tr>")
+                        for header in headers:
+                            item = table.item(j, tracker.headerToColumn[header])
+                                    
+                            htmlLines.append("<td>%s</td>" % item.text())
+                        htmlLines.append("</tr>")
+
+                    htmlLines.append("</tbody></table></body></html>")
+                    html = str.join("\n", htmlLines)
+                    mimeData = QMimeData()
+                    mimeData.setHtml(html)
+                    qApp.clipboard().setMimeData(mimeData)
 
     def pasteItem(self):
         # XXX Use mime and check the mime type instead of scanning the text
@@ -4448,10 +4755,41 @@ class VTTMainWindow(QMainWindow):
                 changed = True
                     
         elif (self.graphicsView.hasFocus() and (len(self.gscene.selectedItems()) > 0)):
-            # XXX This only expects tokens for the time being
-            for item in self.gscene.selectedItems():
+            gscene = self.gscene
+            for item in gscene.selectedItems():
                 logger.info("Deleting graphicsitem %s", item.data(0))
-                self.scene.map_tokens.remove(item.data(0))
+                if (gscene.isToken(item)):
+                    self.scene.map_tokens.remove(item.data(0))
+                
+                elif (gscene.isWallHandle(item)):
+                    wallItem = item.data(0)
+                    # Initialize to len to simplify checks below
+                    i = len(self.scene.map_walls)
+                    if (wallItem is not None):
+                        i = wallItem.data(0)
+                        self.scene.map_walls.pop(i)
+                    wallItem2 = item.data(1)
+                    if (wallItem2 is not None):
+                        i2 = wallItem2.data(0)
+                        # i == i2 on single segments, don't try to delete twice
+                        if (i != i2):
+                            if (i < i2):
+                                i2 -= 1
+                            self.scene.map_walls.pop(i2)
+                        
+                    # XXX No need to re-index wallitems because there's a
+                    #     heavy-handed setscene below, re-index them when
+                    #     setScene is removed
+                    # XXX Removing multiple items requires is not supported yet
+                    #     as it requires re-indexing
+                    break
+            
+                elif (gscene.isDoor(item)):
+                    self.scene.map_doors.remove(item.data(0))
+
+                else:
+                    assert False, "Unknown graphics item %s" % item
+
             changed = True
             
         if (changed):
@@ -4567,7 +4905,7 @@ class VTTMainWindow(QMainWindow):
                 dock.raise_()
 
             # Ctrl is pressed and a browser was found, create a new tab
-            if ((int(qApp.keyboardModifiers()) & Qt.ControlModifier) != 0):
+            if (int(qApp.keyboardModifiers() & Qt.ControlModifier) != 0):
                 dock, newBrowser = self.createBrowser()
                 self.tabifyDockWidget(self.findParentDock(browser), dock)
                 # Raise the tab, keep the same focus
@@ -4927,69 +5265,6 @@ class VTTMainWindow(QMainWindow):
                     break
                 prev = dock
             
-        
-    def importDs(self):
-        # Get the ds filename
-        dirpath = os.path.curdir if self.campaign_filepath is None else self.campaign_filepath
-        filepath, _ = QFileDialog.getOpenFileName(self, "Import Dungeon Scrawl data file", dirpath, "Dungeon Scrawl (*.ds)")
-
-        if (filepath == ""):
-            filepath = None
-
-        if (filepath is None):
-            return
-
-        ds_filepath = filepath
-
-        # Try to load a similarly name and dated png, otherwise ask for the png
-        # filename
-        l = os.listdir(os.path.dirname(ds_filepath))
-        map_filepath = None
-        prefix = os.path.splitext(os.path.basename(ds_filepath))[0]
-        for filename in l:
-            if (filename.startswith(prefix) and filename.endswith(".png")):
-                this_filepath = os.path.join(os.path.dirname(ds_filepath), filename)
-                logger.info("Found png candidate %r", this_filepath)
-                if ((map_filepath is None) or 
-                    # There can be multiple revisions of the png file with
-                    # different cell sizes or (n) suffix from downloading with
-                    # the browser, pick the one that has the date closest to the
-                    # ds file
-                    (
-                     abs(os.path.getmtime(this_filepath) - os.path.getmtime(ds_filepath)) < 
-                     abs(os.path.getmtime(map_filepath) - os.path.getmtime(ds_filepath))
-                    )
-                ):
-                    logger.info("Keeping better matched %r than %r", map_filepath, map_filepath)
-                    map_filepath = this_filepath
-
-        if (map_filepath is None):
-            dirpath = os.path.curdir if self.campaign_filepath is None else self.campaign_filepath
-            filepath, _ = QFileDialog.getOpenFileName(self, "Import Dungeon Scrawl battlemap", dirpath, "PNG file (*.png)")
-
-            if (filepath == ""):
-                filepath = None
-
-            map_filepath = filepath
-
-        # Copy the png to the output dir for the time being so the qvt file
-        # is not left with a file pointing eg to some download directory
-        # XXX This won't be necessary once assets are properly embedded in the qvt
-        if (map_filepath is not None):
-            copy_filepath = os.path.join("_out", os.path.basename(map_filepath))
-            if (os.path.normpath(os_path_abspath(map_filepath)) != os.path.normpath(os_path_abspath(copy_filepath))):
-                os_copy(map_filepath, copy_filepath)
-                map_filepath = copy_filepath
-
-        # Note the map filepath can be none if they decided to load only walls 
-        scene = load_ds(ds_filepath, map_filepath)
-        # XXX Setting a filepath here skips the most recently used and won't ask
-        #     for confirmation when saving, needs better flow
-        # XXX Create this in the out directory for the time being
-        filepath = os.path.splitext(os.path.join("_out", os.path.basename(ds_filepath)))[0] + ".qvt"
-        self.setScene(scene, filepath)
-        
-        
     def loadScene(self, filepath):
         self.showMessage("Loading %r" % filepath)
 
@@ -5425,8 +5700,8 @@ class VTTMainWindow(QMainWindow):
             gscene.addImage(map_image)
             
     def populateWalls(self, gscene, scene):
-        for map_wall in scene.map_walls:
-            gscene.addWall(map_wall)
+        for i, map_wall in enumerate(scene.map_walls):
+            gscene.addWall(map_wall, i)
             
     def populateDoors(self, gscene, scene):
         for map_door in scene.map_doors:
@@ -6003,22 +6278,27 @@ class VTTMainWindow(QMainWindow):
             if (fogCenter is not None):
                 fogCenter = fogCenter.x(), fogCenter.y()
                 name = "????"
+                scale = 0.0
                 if (gscene.getFogCenterLocked()):
                     name = "LOCKED"
                     
                 elif (gscene.isToken(gscene.focusItem())):
                     map_token = gscene.focusItem().data(0)
                     name = map_token.name
+                    scale = map_token.scale
                     if (map_token.hidden):
                         name = "*" + name
                     
-                s = "%s: %.01f,%.01f " % (name, fogCenter[0], fogCenter[1])
+                s = "%s: %.01f,%.01f %.2f" % (name, fogCenter[0], fogCenter[1], scale)
 
             else:
                 s = ""
 
             # XXX Assumes 5ft per cell
-            s += " LR %.2f" % (gscene.getLightRange() * 5.0 / gscene.getCellDiameter())
+            s += " %s (%.2f)" % (
+                gscene.getLightRangeName(gscene.getLightRange()), 
+                gscene.getLightRange() * 5.0 / gscene.getCellDiameter()
+            )
             s += " S" if (gscene.getSnapToGrid()) else " NS"
             s += " G" if (self.graphicsView.drawGrid) else " NG"
                 
