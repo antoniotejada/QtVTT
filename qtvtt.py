@@ -5,6 +5,10 @@
 Qt Virtual Table Top
 (c) Antonio Tejada 2022
 
+References
+- https://github.com/qt/qt5
+- https://github.com/qt/qtbase/tree/5.3
+
 """
 
 import csv
@@ -76,9 +80,9 @@ def setup_logger(logger):
 
 logger = logging.getLogger(__name__)
 setup_logger(logger)
-#logger.setLevel(logging.DEBUG)
+logger.setLevel(logging.DEBUG)
 #logger.setLevel(logging.WARNING)
-logger.setLevel(logging.INFO)
+#logger.setLevel(logging.INFO)
 
 class Struct:
     """
@@ -302,6 +306,20 @@ def qtuple(q):
     else:
         assert False, "Unhandled Qt type!!!"
 
+alignmentFlagToName = {
+    getattr(Qt, name) : name for name in vars(Qt) 
+    if isinstance(getattr(Qt, name), Qt.AlignmentFlag)
+}
+def qAlignmentFlagToString(alignmentFlag):
+    return alignmentFlagToName.get(int(alignmentFlag), str(alignmentFlag))
+
+fontWeightToName = {
+    getattr(QFont, name) : name for name in vars(QFont) 
+    if isinstance(getattr(QFont, name), QFont.Weight)
+}
+def qFontWeightToString(fontWeight):
+    return fontWeightToName.get(int(fontWeight), str(fontWeight))
+
 eventTypeToName = {
     getattr(QEvent, name) : name for name in vars(QEvent) 
     if isinstance(getattr(QEvent, name), QEvent.Type)
@@ -309,46 +327,26 @@ eventTypeToName = {
 def qEventTypeToString(eventType):
     return eventTypeToName.get(eventType, str(eventType))
 
-itemChangeToName = { 
-3 : "ItemEnabledChange",
-13 : "ItemEnabledHasChanged",
-1 : "ItemMatrixChange",
-0 : "ItemPositionChange",
-9 : "ItemPositionHasChanged",
-8 : "ItemTransformChange",
-10 : "ItemTransformHasChanged",
-28 : "ItemRotationChange",
-29 : "ItemRotationHasChanged",
-30 : "ItemScaleChange",
-31 : "ItemScaleHasChanged",
-32 : "ItemTransformOriginPointChange",
-33 : "ItemTransformOriginPointHasChanged",
-4 : "ItemSelectedChange",
-14 : "ItemSelectedHasChanged",
-2 : "ItemVisibleChange",
-12 : "ItemVisibleHasChanged",
-5 : "ItemParentChange",
-15 : "ItemParentHasChanged",
-6 : "ItemChildAddedChange",
-7 : "ItemChildRemovedChange",
-11 : "ItemSceneChange",
-16 : "ItemSceneHasChanged",
-17 : "ItemCursorChange",
-18 : "ItemCursorHasChanged",
-19 : "ItemToolTipChange",
-20 : "ItemToolTipHasChanged",
-21 : "ItemFlagsChange",
-22 : "ItemFlagsHaveChanged",
-23 : "ItemZValueChange",
-24 : "ItemZValueHasChanged",
-25 : "ItemOpacityChange",
-26 : "ItemOpacityHasChanged",
-27 : "ItemScenePositionHasChanged", }
-        
-def qItemChangeToString(change):
-    return itemChangeToName.get(change, str(change))
+class EventTypeString:
+    """
+    Using the class instead of the function directly, prevents the conversion to
+    string when used as logging parameter, increasing performance.
+    """
+    def __init__(self, eventType):
+        self.eventType = eventType
 
-class ItemChangeString:
+    def __str__(self):
+        return qEventTypeToString(self.eventType)
+
+
+graphicsItemChangeToName = {
+    getattr(QGraphicsItem, name) : name for name in vars(QGraphicsItem) 
+    if isinstance(getattr(QGraphicsItem, name), QGraphicsItem.GraphicsItemChange)
+}
+def qGraphicsItemChangeToString(change):
+    return graphicsItemChangeToName.get(change, str(change))
+
+class GraphicsItemChangeString:
     """
     Using the class instead of the function directly, prevents the conversion to
     string when used as logging parameter, increasing performance.
@@ -360,7 +358,7 @@ class ItemChangeString:
         self.change = change
 
     def __str__(self):
-        return qItemChangeToString(self.change)
+        return qGraphicsItemChangeToString(self.change)
 
 def qFindTabBarFromDockWidget(dock):
     logger.info("%s", dock.windowTitle())
@@ -396,6 +394,49 @@ def qLaunchWithPreferredAp(filepath):
         # Note there's no splitCommand in this version of Qt5, build the
         # argument list manually
         QProcess.startDetached("xdg-open", [filepath])
+
+def qImageToDataUrl(imageOrPixmap, imageFormat):
+    """
+    This works for both QImage and QPixmap because both have the same save
+    member function
+    """
+    import base64
+
+    ba = QByteArray()
+    buff = QBuffer(ba)
+    buff.open(QIODevice.WriteOnly) 
+    ok = imageOrPixmap.save(buff, imageFormat)
+    assert ok
+    imgBytes = ba.data()
+
+    base64Image = base64.b64encode(imgBytes).decode('utf-8')
+    dataUrl = 'data:image/png;base64,%s' % base64Image
+
+    return dataUrl
+
+def qKeyPressEventToSequence(event):
+    assert event.type() == QEvent.Keypress
+
+    return QKeySequence(event.key() | int(event.modifiers()))
+
+def qEventIsShortcut(event, shortcut_or_list):
+    if (isinstance(shortcut_or_list, (list, tuple))):
+        return any([qEventIsShortcut(event, shortcut) for shortcut in shortcut_or_list])
+
+    else:
+        return (QKeySequence(event.key() | int(event.modifiers())) == QKeySequence(shortcut_or_list))
+
+def qEventIsKeyShortcut(event, shortcut_or_list):
+    if (event.type() == QEvent.KeyPress):
+        return qEventIsShortcut(event, shortcut_or_list)
+    else:
+        return False
+
+def qEventIsShortcutOverride(event, shortcut_or_list):
+    if (event.type() == QEvent.ShortcutOverride):
+        return qEventIsShortcut(event, shortcut_or_list)
+    else:
+        return False
 
 class NumericTableWidgetItem(QTableWidgetItem):
     """
@@ -613,8 +654,9 @@ def import_ds_walls(scene, filepath):
                             # XXX Check for duplicates higher up to discard earlier?
                             #     (watch for interactions with coalescing?)
                             if (wall not in duplicates):
-                                # Convert to lists so they can be edited later 
-                                # in the application
+                                # Need tuples to add to sets and check for
+                                # duplicates but lists so they can be edited
+                                # later in the application, convert to list
                                 if (is_door):
                                     door.extend(list(wall))
                                 else:
@@ -689,6 +731,11 @@ def build_index(dirpath):
     filepath_to_title = dict()
     title_to_filepath = dict()
     
+    # XXX webhelp\mm has forced brs which look double spaced on QTextEdit,
+    #     reformat and fix so everything comes from webhelp? (look ok-ish on
+    #     Edge but not on QTextBrowser). Also has forced font and size HTML
+    #     attribs
+    # XXX Get all these from the public Fantasy Grounds 2E pack instead?
     for subdirpath in ["Monsters1", R"cdrom\WEBHELP\DMG", R"cdrom\WEBHELP\PHB"]:
         print "indexing", subdirpath
         for filename in os.listdir(os.path.join(dirpath, subdirpath)):
@@ -973,7 +1020,7 @@ class VTTTableWidget(QTableWidget):
         # This can also be done with the individual event handlers, but using
         # eventFilter allows a unique codepath and probably simpler (the
         # individual event handler won't trap eg viewport events)
-        logger.info("source %s type %s", class_name(source), qEventTypeToString(event.type()))
+        logger.info("source %s type %s", class_name(source), EventTypeString(event.type()))
         table = self
         if (
             ((source == table.viewport()) and 
@@ -1718,12 +1765,11 @@ class EncounterBuilder(QWidget):
 
 
     def eventFilter(self, source, event):
-        logger.debug("source %s type %s", class_name(source), qEventTypeToString(event.type()))
-        if ((source == self.encounterTable) and (event.type() == QEvent.ShortcutOverride) and
-            (event.key() == Qt.Key_Delete)):
-            logger.info("%d", event.key())
-            # XXX Ignore the global "del" key shortcut so cells can be edited,
-            #     fix in some other way (per dockwidget actions?) and remove, 
+        logger.debug("source %s type %s", class_name(source), EventTypeString(event.type()))
+        if ((source == self.encounterTable) and qEventIsShortcutOverride(event, "del")):
+            logger.info("ShortcutOverride for %d", event.key())
+            # Ignore the global "del" key shortcut so cells can be edited,
+            # XXX Fix in some other way (per dockwidget actions?) and remove,
             #     see Qt.ShortcutContext
             event.accept()
             return True
@@ -1761,7 +1807,917 @@ class EncounterBuilder(QWidget):
 
                 else:
                     self.monsterTable.hideRow(j)
+
+class VTTTextEditor(QTextEdit):
+    """
+    Text editor with markdown-feature level support:
+    - headings
+    - bullet/numbered lists
+    - blockquote
+    - paragraph alignment (left, justified, center, right)
+    - text formatting (bold/italic/underline)
+    - tables
+    - images
+    
+    References
+    - https://doc.qt.io/qt-5/richtext-html-subset.html
+    - https://doc.qt.io/qt-5/richtext-structure.html
+    - https://doc.qt.io/qt-5/richtext.html
+    - https://github.com/mfessenden/SceneGraph/blob/master/qss/stylesheet.qss
+    - https://github.com/qt/qtbase/blob/5.3/src/gui/text/qtextdocument.cpp
+
+    Implementation 
+        This uses Qt api instead of inserting HTML text because 
+        - <span> and <p> can be inserted in the html, but they are not preserved
+        - QT removes HTML tags with no content, so there's no way to set the
+          format of an empty paragraph
+    """
+    formatShortcuts = ["ctrl+1", "ctrl+2", "ctrl+3", "ctrl+4", "ctrl+b", "ctrl+i", "ctrl+l", "ctrl+q", "ctrl+t", "ctrl+u"]
+    tokenToListStyle = { 
+        "-" : QTextListFormat.ListSquare, 
+        "*" : QTextListFormat.ListDisc, "+" : QTextListFormat.ListCircle, 
+        "1." : QTextListFormat.ListDecimal,
+        "A." : QTextListFormat.ListUpperAlpha, "a." : QTextListFormat.ListLowerAlpha, 
+        "I." : QTextListFormat.ListUpperRoman, "i." : QTextListFormat.ListLowerRoman, 
+    }
+    
+    def __init__(self, *args, **kwargs):
+        super(VTTTextEditor, self).__init__(*args, **kwargs)
+
+        # XXX Use some style sheet instead of hard-coding here?
+        fontId = QFontDatabase.addApplicationFont(os.path.join("_out", "fonts", "Montserrat-Light.ttf"))
+        logger.info("Font Families %s",QFontDatabase.applicationFontFamilies(fontId))
+        # XXX Looks like when exporting to HTML there are spurious quote marks,
+        #     probably because of the whitespace?
+        font = QFont("Montserrat Light")
+        font.setPointSize(10)
+        self.setFont(font)
+        self.setTextInteractionFlags(self.textInteractionFlags() | Qt.LinksAccessibleByMouse)
+
+        self.document().contentsChange.connect(self.contentsChange)
+        self.installEventFilter(self)
+        
+        # XXX Get Trilium styles from 
+        #     https://github.com/zadam/trilium/blob/master/src/public/stylesheets/style.css
+        # See https://doc.qt.io/qt-5/richtext-html-subset.html
+        # XXX Find a way of doing single border tables, no style seems to work
+        #     unless put directly as attribute in the table or using the Qt API?
+        self.document().setDefaultStyleSheet("""
+            table {
+                /* border-collapse: collapse; */ /* Doesn't work to get single border */
+                /* border-top-style: none; */
+                border-width : 1;  /* works */
+                /* border-top-width : 1px; */
+                /* border-style: dashed; */ /* Works */
+                border-style: ridge; /* Doesn't work */
+                /* border-color: red;*/ /* Works */
+                /* border-bottom-color: red; */ /* Doesn't work */
+                /* border settings (top-width, style, etc don't seem to work */
+                /* border-spacing: 0; */ /* Doesn't work, cellspacing works as table attribute, but not as CSS */
+            }
+            th { 
+                background-color: lightgrey;
+                color: black; 
+            }
+            /* tr { 
+                border-width: 0px;
+                border-style: solid;
+            }
+            td { 
+                border-width: 0px;
+                border-style: solid;
+            }*/
+        """)
+
+    def paintEvent(self, event):
+        """
+        Paint a vertical line on the left margin of indented blocks
+        (blockquotes)
+        """
+        super(VTTTextEditor, self).paintEvent(event)
+        
+        # Find indentation blocks and draw a vertical line on the left margin
+        block = self.document().begin()
+        while (block.isValid()):
+            # XXX Could also use setUserData or setUserState to detect them, (or
+            #     store them in some set/list, but keeping it uptodate can be an
+            #     issue). Currently this also detects list blocks where the
+            #     bullet has been removed via backspace
+            if (block.blockFormat().indent() > 0):
+                cursor = QTextCursor(block)
+                blockLayout = block.layout()
+                rect = blockLayout.boundingRect()
+                rect.translate(blockLayout.position())
+                painter = QPainter(self.viewport())
+                # The viewport painter is not translated to the scroll position
+                # by default, needs explicit translation
+                painter.translate(-self.horizontalScrollBar().value(), -self.verticalScrollBar().value())
+                painter.fillRect(
+                    rect.x() - self.document().indentWidth() / 2, 
+                    rect.y(), 
+                    5, rect.height(), 
+                    Qt.gray)
+                # Not using .end() causes a silent app crash
+                painter.end()
                 
+            block = block.next()
+
+    def eventFilter(self, source, event):
+        logger.debug("source %s type %s", class_name(source), EventTypeString(event.type()))
+        if ((source == self) and qEventIsShortcutOverride(event, VTTTextEditor.formatShortcuts)):
+            logger.info("Control char %r %d", event.text(), event.key())
+            # Ignore some global keys so they can be used for formatting text
+            # XXX Fix in some other way (per dockwidget actions?) and remove,
+            #     see Qt.ShortcutContext
+            # Note even with shortcutoverride widget-local QActions won't
+            # work
+            logger.info("ShortcutOverride for %d", event.key())
+            event.accept()
+
+            return True
+
+        elif ((source == self) and qEventIsKeyShortcut(event, VTTTextEditor.formatShortcuts)):
+            self.toggleFormat(QKeySequence(event.key()).toString().lower())
+            
+            return True
+        
+        return False
+
+    def toggleFormat(self, formatChar):
+        """
+        If some text is selected, format as given, otherwise change current
+        format. If the text or current format already have that format, remove
+        that format
+
+        formatChar is one of 
+        - "b", "i", "u" (bold, italic, underline)
+        - "t" (left, center, right, justified alignment)
+        - "1", "2", "3", "4" (Heading level, level 1 is largest font)
+        - "q" toggle blockquote
+        - "l", "ll", "lll", "llll" create/cycle list style with as many "l" as
+          index to styles + 1 (circle, square, disc, numeric, non-numeric..)
+        """
+        # XXX This should allow for reverse toggle in case of multiple toggles
+        #     (eg back cycling through list styles), probably using upper vs.
+        #     lower case format char? (testing for shift modifier here is not
+        #     clean since it's called from eg token parsing)
+
+        logger.info("formatChar %r", formatChar)
+        # XXX Every setTextCursor causes a textChanged, should block signals
+        #     until the last one?
+        # XXX This should use beginEditBlock so the operations are atomic from
+        #     undo/redo point of view?
+        # Note this works for setting both the selected text format or the
+        # current format if no selection
+        prevCursor = self.textCursor()
+        cursor = self.textCursor()
+            
+        if (formatChar in ["1", "2", "3", "4"]):
+            # Block format
+            
+            # Note blockCharFormat is not the current block format but the
+            # format when inserting at the beginning of an empty block. 
+            # Select and change the charformat from the start to the end
+            # of the block
+
+            # Note StartOfLine is the start of the wrapped line, not the
+            # physical line, use StartOfBlock instead
+            # XXX This doesn't work when selecting multiple paragraphs, would 
+            #     need to iterate since it needs to add/remove rulers?
+            cursor.movePosition(QTextCursor.StartOfBlock)
+            cursor.movePosition(QTextCursor.EndOfBlock, QTextCursor.KeepAnchor)
+            fmt = cursor.charFormat()
+            # XXX This should remove all other formats?
+
+        elif (formatChar == "t"):
+            # Cycle through paragraph text alignments
+            # XXX This currently affects headings too, prevent?
+            # XXX Make this affect the table position (works for cells but not
+            #     for centering the table in the page)
+            # XXX Needs image sizing options (width, 1/2 size, etc) or do it at
+            #     import/paste time? Note the image sizing option needs to be 
+            #     HTML compatible so they can be saved and restored
+            alignments = [Qt.AlignLeft, Qt.AlignJustify, Qt.AlignHCenter, Qt.AlignRight]
+            alignment = self.alignment()
+            i = index_of(alignments, alignment)
+            delta = -1 if (int(qApp.keyboardModifiers() & Qt.ShiftModifier) != 0) else 1
+            alignment = alignments[(i + delta) % len(alignments)]
+            self.setAlignment(alignment)
+
+        elif (formatChar.startswith("l")):
+            styles = sorted(VTTTextEditor.tokenToListStyle.values())
+            textList = cursor.currentList()
+            i = formatChar.count("l") - 2
+            
+            if (textList is not None):
+                # Modify the current list style
+                if (i == -1):
+                    # No style provided, cycle through styles
+                    # XXX Remove list on wrap around?
+                    i = index_of(styles, textList.format().style())
+                    i = (i + 1) % len(styles)
+
+                fmt = textList.format()
+                fmt.setStyle(styles[i])
+                fmt = textList.setFormat(fmt)
+
+            else:
+                # Create a list with the cursor as first item and 
+                i = max(0, i)
+                cursor.createList(styles[i])
+
+        elif (formatChar == "q"):
+            # Block-align the selection in case text from multiple blocks is
+            # selected
+            start = QTextCursor(prevCursor)
+            start.setPosition(prevCursor.selectionStart())
+            start.movePosition(QTextCursor.StartOfBlock)
+
+            end = QTextCursor(prevCursor)
+            end.setPosition(prevCursor.selectionEnd())
+            end.movePosition(QTextCursor.EndOfBlock)
+
+            cursor.setPosition(start.position())
+            cursor.setPosition(end.position(), QTextCursor.KeepAnchor)
+            
+            indented = (cursor.blockFormat().indent() != 0)
+
+            # Toggle indent
+            fmt = QTextBlockFormat()
+            # Set the indent via setIndent, another option is to set the
+            # leftMargin (eg fmt.setLeftMargin(30))
+            # - setLeftMargin appears on the HTML but it's fixed and cannot be
+            #   removed with the backspace key
+            # - setIndent doesn't show in the HTML (uses -qt-text-indent private
+            #   attribute) but it's relative to document().indentWidth and can
+            #   be removed with the backspace key
+            fmt.setIndent(0 if indented else 1)
+            cursor.mergeBlockFormat(fmt)
+            
+            # Toggle italic
+            fmt = QTextCharFormat()
+            fmt.setFontItalic(not indented)
+            cursor.mergeCharFormat(fmt)
+
+            self.setTextCursor(cursor)
+
+            # Put the cursor back to where it was
+            self.setTextCursor(prevCursor)
+
+        else:
+            # Char format
+
+            # Always look at the format at the end of the selection in case the
+            # selection is reversed and the cursor points to the char *before*
+            # the selection. This also works if there's no selection since
+            # selectionEnd() returns position() if no selection
+            c = self.textCursor()
+            c.setPosition(c.selectionEnd())
+            fmt = c.charFormat()
+
+        if (formatChar == "b"):
+            fmt.setFontWeight(QFont.Normal if (fmt.fontWeight() == QFont.Bold) else QFont.Bold)
+
+        elif (formatChar == "i"):
+            fmt.setFontItalic(not fmt.fontItalic())
+
+        elif (formatChar == "u"):
+            fmt.setFontUnderline(not fmt.fontUnderline())
+
+        elif (formatChar in ["1", "2", "3", "4"]):
+            # XXX If heading is used on a ruler block it should move up or
+            #     ignore? But note that the ruler can be moved manually so the
+            #     block above may not be the heading so it should just ignore?
+            #     (but it should also ignore on tables, images, etc?)
+            level = int(formatChar)
+            hLevel = fmt.property(QTextFormat.FontSizeAdjustment)
+            if (hLevel is not None):
+                hLevel = 3 - hLevel + 1
+            # Note this could insertHtml with the appropriate heading, but 
+            # html formatting is removed by QtTextEditor if there are no chars
+            # so format cannot be set on an empty paragraph, use FontSizeAdjustment
+            # property instead, see
+            # https://github.com/qt/qtbase/blob/5.3/src/gui/text/qtextdocument.cpp#L2446
+            # https://github.com/qt/qtbase/blob/5.14/src/gui/text/qtextmarkdownimporter.cpp
+            # 0: medium, 1: large, 2: x-large, 3: xx-large, 4: xxx-large
+            # Note in the sources there's no xxx-large, although using it
+            # renders fine but fails to be saved in the HTML
+            if (hLevel != level):
+                # Don't bother using setHeadingLevel since it's not supported on
+                # this Qt version and as per docs it doesn't change the font
+                # size anyway, it's just a signaling flag
+                fmt.setProperty(QTextFormat.FontSizeAdjustment, 3 - level + 1)
+                fmt.setFontWeight(QFont.Bold)
+
+                # Set the charformat as both the charformat and the
+                # blockcharformat, this makes the format work for non-empty
+                # blocks (which selected text take the format from the
+                # charformat) and empty blocks (which new text will take the
+                # format from the blockcharformat)
+                cursor.setBlockCharFormat(fmt)
+                cursor.setCharFormat(fmt)
+
+                self.setTextCursor(cursor)
+
+                # Insert a horizontal ruler if there's no next block or if it's
+                # not a ruler already, needs to be on an empty block by itself
+                # (setting a ruler on a block with text renders fine but when
+                # saving to HTML saves the HR but not the text)
+                nextBlock = cursor.block().next()
+                if ((not nextBlock.isValid()) or 
+                    (nextBlock.blockFormat().property(QTextFormat.BlockTrailingHorizontalRulerWidth) is None)):
+                    blockFmt = cursor.blockFormat()
+                    blockFmt.setProperty(QTextFormat.BlockTrailingHorizontalRulerWidth, True)
+
+                    # No need to set size and bold on the ruler, remove so they
+                    # don't get propagated to new blocks if this is the last
+                    # block
+                    fmt = cursor.blockCharFormat()
+                    fmt.setFontWeight(QFont.Normal)
+                    fmt.clearProperty(QTextFormat.FontSizeAdjustment)
+                    
+                    cursor.clearSelection()
+                    cursor.insertBlock(blockFmt, fmt)
+
+                    # If this is the last block in the document, insert an empty
+                    # block so the ruler is not propagated to the next block
+
+                    # XXX Alternatively clear all formatting when return is
+                    #     pressed on empty line?
+                    if (not cursor.block().next().isValid()):
+                        blockFmt = cursor.blockFormat()
+                        blockFmt.clearProperty(QTextFormat.BlockTrailingHorizontalRulerWidth)
+
+                        cursor.insertBlock(blockFmt)
+                    
+                # Put the cursor back to where it was
+                # XXX This doesn't work when the cursor is at the end of the
+                #     line (cursor ends in the ruler block) but it works when
+                #     the cursor is elsewhere?
+                self.setTextCursor(prevCursor)
+                
+            else:
+                # Already this heading level so toggle, clear formatting and
+                # ruler
+
+                # setProperty(None) instead of clearProperty also works
+                fmt.clearProperty(QTextFormat.FontSizeAdjustment)
+                fmt.setFontWeight(QFont.Normal)
+                
+                # Note mergeCharFormat fails to remove FontSizeAdjustment, use
+                # setCharFormat instead
+                cursor.setCharFormat(fmt)
+                cursor.setBlockCharFormat(fmt)
+                self.setTextCursor(cursor)
+
+                # Remove the selection
+                self.setTextCursor(prevCursor)
+                
+                nextBlock = cursor.block().next()
+                # Note the ruler is set on the blockFormat, not on the first
+                # textFormat, in fact the block has no textFormats since it's 
+                # empty
+                if ((nextBlock is not None) and 
+                    (nextBlock.blockFormat().property(QTextFormat.BlockTrailingHorizontalRulerWidth) is not None)):
+                    cursor = QTextCursor(nextBlock)
+                    cursor.select(QTextCursor.BlockUnderCursor)
+                    cursor.removeSelectedText()
+                    cursor.deleteChar()
+
+        elif ((formatChar in ["t", "q"]) or formatChar.startswith("l")):
+            # Already done
+            pass
+
+        else:
+            assert False, "Unrecognized format char %s!!!" % formatChar
+
+        if (formatChar in ["b", "i", "u"]):
+            # setCurrentCharFormat will change the selectionformat or, if no
+            # selection, the format for the next typed chars
+            self.setCurrentCharFormat(fmt)
+                
+    def parseFormat(self, position, length):
+        """
+        Parse markdown-like formatting tokens:
+
+        #, ##, ###, ####        Headings
+        - + * 1. I. i. a. A.    Different bullet lists (disc, square, circle, etc)
+        >                       Blockquote
+
+        xXX Missing the following:
+        
+        **<nonspace> as begin bold
+        <nonspace>** as end bold
+        *<nonspace> as begin italic
+        <nonspace>* as end italic
+        ***<nonspace> as begin italic bold
+        <nonspace>*** as end italic bold
+        _<nonspace> as begin underline
+        <nonspace>_ as end underline
+        
+        -- horizontal rule
+        [title](link)
+
+        del on empty line, remove horizontal rule if any
+        backspace on blockquote remove blockquote
+        
+        nest lists on tab inside list
+        
+        See https://www.markdownguide.org/cheat-sheet/
+        """
+        # The token must start at begin of block/paragraph, find the start of
+        # the block where the chars are being added. Note QTextEdit uses
+        # u"\u2029" or QChar.ParagraphSeparator instead of \n
+        doc = self.document()
+        block = doc.findBlock(position)
+
+        # Parse all tokens added
+        # XXX This shouldn't work for multiple tokens because toggleFormat will
+        #     add blocks, needs toggleFormat to render to an "offscreen
+        #     textfragment" that is later pasted wholesome into the document, or
+        #     needs to parse tokens starting with the last one. Not clear why
+        #     it's working in some limited testing.
+        while (block.isValid() and (block.position() < position + length)):
+            tokenStart = tokenEnd = block.position()
+            token = ""
+            # XXX This could ignore parsing the token if the position is far
+            #     away from the block start, since all tokens must start at
+            #     beginning of paragraph and are at most a few chars long
+            while ((tokenEnd < (tokenStart + block.length())) and (not doc.characterAt(tokenEnd).isspace())):
+                c = doc.characterAt(tokenEnd)
+                token += c
+                tokenEnd += 1
+            
+            # Note tokenEnd is exclusive, python string style
+            assert len(token) == (tokenEnd - tokenStart)
+
+            block = block.next()
+        
+            logger.info("token is %r prechar is %r", token, doc.characterAt(tokenStart - 1))
+            formatChar = ""
+            if (token.startswith("#")):
+                count = min(token.count("#"), 4)
+                formatChar = "%d" % count
+                
+            elif (token == ">"):
+                # XXX Missing handling tab/shift-tab to increase/decrease
+                #     indent?
+                formatChar = "q"
+
+            elif (token in VTTTextEditor.tokenToListStyle):
+                # XXX When parsing multiple tokens this should merge all the 
+                #     list items in the same list
+                # XXX Missing nesting indentation levels with tab, removing
+                #     with shift+tab
+                styles = sorted(VTTTextEditor.tokenToListStyle.values())
+                style = VTTTextEditor.tokenToListStyle[token]
+                i = index_of(styles, style)
+                formatChar = "l" * (i + 2)
+            
+            if (formatChar is not None):
+                # Remove token plus space
+                cursor = self.textCursor()
+                cursor.setPosition(tokenStart)
+                cursor.setPosition(tokenEnd + 1, QTextCursor.KeepAnchor)
+                cursor.removeSelectedText()
+                # Move the cursor to the format toggling point
+                self.setTextCursor(cursor)
+                self.toggleFormat(formatChar)
+
+            # XXX Have a console mode to enter commands, die rolls, macros, etc?
+            # XXX Allow html?
+        
+
+    def contentsChange(self, position, charsRemoved, charsAdded):
+        # For live keyboard entry this is called with a single char added or
+        # removed, for cut and paste this is called with several
+        logger.info("position %d removed %d added %d", position, charsRemoved, charsAdded)
+
+        # XXX This only considers tokens as result of adding chars, what if
+        #     deleting chars causes a token to be formed?
+        if (charsAdded > 0):
+            cursor = self.textCursor()
+            cursor.setPosition(position)
+            cursor.setPosition(position + charsAdded, QTextCursor.KeepAnchor)
+            chars = cursor.selectedText()
+
+            logger.info("added chars are %r", chars)
+
+            # Tokens must start at beginning of paragraph and end with space, 
+            # early exit if no spaces were added
+            if (" " not in chars):
+                return
+
+            self.parseToken(position, charsAdded)
+
+
+    def canInsertFromMimeData(self, source):
+        if (source.hasImage()):
+            return True
+
+        else:
+            return super(VTTTextEditor, self).canInsertFromMimeData(source)
+
+    def insertFromMimeData(self, source):
+        # See https://www.pythonguis.com/examples/python-rich-text-editor/
+
+        cursor = self.textCursor()
+        document = self.document()
+
+        # XXX Allow internal urls like qtvtt:combattracker, qtvtt:image to
+        #     display live tables, maps, images, etc
+        if (source.hasUrls()):
+            # XXX This path is untested and left for reference on how to insert
+            #     images via resources (which need to be saved separately)
+            #     instead of embedded as dataurl
+            # XXX Get these from Qt
+            IMAGE_EXTENSIONS = [".png", ".jpeg", ".jpg", ".webp"]
+            for url in source.urls():
+                # XXX use toLocalFile in several other places that convert from
+                #     QUrl to file?
+                
+                # XXX Images get pasted as html img tags with the provided url,
+                #     the image needs to be saved separately or converted to
+                #     an embedded data: url
+                root, ext = os.path.splitext(str(u.toLocalFile()))
+                ext = ext.lower()
+                if (url.isLocalFile() and (ext in IMAGE_EXTENSIONS)):
+                    image = QImage(url.toLocalFile())
+                    document.addResource(QTextDocument.ImageResource, url, image)
+                    cursor.insertImage(url.toLocalFile())
+
+                else:
+                    super(VTTTextEditor, self).insertFromMimeData(source)
+
+        elif (source.hasImage()):
+            image = source.imageData()
+            imformat = "PNG"
+            # XXX This could use a local url instead and save the file
+            #     separately?
+            dataUrl = qImageToDataUrl(image, imformat)
+            # XXX Needs scaling settings, note Qt only allows absolute sizes,
+            #     not relative (percentage) sizes which would need to hook on
+            #     QTextEdit resizing support and wouldn't be saved with the 
+            #     html?
+            cursor.insertImage(dataUrl)
+            
+        else:
+            super(VTTTextEditor, self).insertFromMimeData(source)
+
+            
+class DocEditor(QWidget):
+    """
+    Documentation text editor, search function, and realtime-generated table of
+    contents.
+    """
+    def __init__(self, *args, **kwargs):
+        super(DocEditor, self).__init__(*args, **kwargs)
+
+        self.lastCursor = None
+        self.lastPattern = None
+        self.lastExtraSelection = 0
+
+        tocTree = QTreeWidget()
+        self.tocTree = tocTree
+        tocTree.setColumnCount(1)
+        tocTree.setHeaderHidden(True)
+        # Don't focus this on wheel scroll
+        tocTree.setFocusPolicy(Qt.StrongFocus)
+
+        def treeItemClicked(item):
+            logger.info("%s", item.text(0))
+            position = item.data(0, Qt.UserRole)
+            textCursor = self.textEdit.textCursor()
+            textCursor.setPosition(item.data(0, Qt.UserRole))
+            # Go to the end then back so the line is not at the bottom of the
+            # viewport (both ensureCursorVisible and setCursor display the line
+            # at the bottom of the viewport)
+            self.textEdit.moveCursor(QTextCursor.End)
+            self.textEdit.setTextCursor(textCursor)
+            self.textEdit.setFocus(Qt.TabFocusReason)
+            
+        tocTree.itemClicked.connect(treeItemClicked)
+
+        textEdit = VTTTextEditor()
+        self.textEdit = textEdit
+        # Don't focus this on wheel scroll
+        textEdit.setFocusPolicy(Qt.StrongFocus)
+
+        # XXX Add toolbar buttons for format, font name, font size, alignment,
+        #     use the current statusbar code to update them?
+
+        def textChanged():
+            # Rebuild the TOC
+            # XXX This should only rebuild if chars in headers have changed?
+            tocTree.clear()
+            
+            stack = []
+            parentItem = None
+            item = None
+            prevLevel = 0
+            # The non-H1 font sizes appear in the html as
+            #
+            #   re.finditer(r"<span [^>]*font-size:(\d+)pt[^>]*>([^<]*)", html):
+            #
+            # but unless anchors are used in the text, it's hard to find a
+            # reference to scroll to when the TOC item is clicked, so parse
+            # blocks instead of html.
+            #
+            # XXX This could also use insertHtml and anchors with name attribute and
+            #     then scrollToAnchor
+            #     https://stackoverflow.com/questions/20678610/qtextedit-set-anchor-and-scroll-to-it
+            
+            # Note that eg each cell in a table is a different block, so there
+            # can be lots of blocks in complex documents
+            # XXX Sync the TOC from the text too
+            block = textEdit.document().begin()
+            while (block.isValid()):
+                # There can be multiple textformats per block, but for headings
+                # only need to look at the first one (note block.charFormatIndex
+                # or block.charFormat give the default format for the block, not 
+                # for the chars inside the block)
+                textFormats = block.textFormats()
+                if (len(textFormats) > 0):
+                    text = block.text()
+                    position = block.position()
+                    fontSizeAdjustment = textFormats[0].format.property(QTextFormat.FontSizeAdjustment)
+                    if (fontSizeAdjustment is None):
+                        level = None
+
+                    else:
+                        level = 3 + 1 - fontSizeAdjustment
+                
+                else:
+                    # Some blocks have no textFormats, skip this block
+                    level = None
+                block = block.next()
+                
+                if (level is None):
+                    continue
+                
+                deltaLevels = prevLevel - level
+
+                # Find a parent for this item
+                if (deltaLevels > 0):
+                    # This item is higher in the tree hierarchy than the current
+                    # level, pop as many parents as deltaLevels
+                    parentItem = stack[-deltaLevels]
+                    stack = stack[:-deltaLevels]
+                    
+                elif (deltaLevels < 0):
+                    # This item is lower in the tree hierarchy than the current
+                    # level, push as many parents as deltaLevels
+                    stack.append(parentItem)
+                    parentItem = item
+                    # If there are missing parents, create as many dummy
+                    # placeholder parents as deltaLevels - 1
+                    for i in xrange(-deltaLevels - 1):
+                        stack.append(parentItem)
+                        item = QTreeWidgetItem(["???"])
+                        if (parentItem is None):
+                            tocTree.addTopLevelItem(item)
+
+                        else:
+                            parentItem.addChild(item)
+                            parentItem.setExpanded(True)
+                        parentItem = item
+
+                # Create the item with the found parent
+                item = QTreeWidgetItem([text])
+                if (parentItem is None):
+                    tocTree.addTopLevelItem(item)
+
+                else:
+                    parentItem.addChild(item)
+                    parentItem.setExpanded(True)
+
+                # Store a reference so it can scroll there when activating the
+                # tree item
+                item.setData(0, Qt.UserRole, position)
+                
+                prevLevel = level
+                
+        textEdit.textChanged.connect(textChanged)
+        textEdit.installEventFilter(self)
+
+        lineEdit = QLineEdit(self)
+        self.lineEdit = lineEdit
+        lineEdit.setPlaceholderText("Search...")
+        lineEdit.textChanged.connect(self.textChanged)
+        lineEdit.returnPressed.connect(self.returnPressed)
+        lineEdit.installEventFilter(self)
+
+        label = QLabel("0/0")
+        self.counterLabel = label
+
+        hbox = QHBoxLayout()
+        hbox.setContentsMargins(0, 0, 0, 0)
+        hbox.addWidget(QLabel("Search"))
+        hbox.addWidget(lineEdit)
+        # XXX Make replace, word, case and regexp work, will need better
+        #     handling of the current hide on focusout policy
+        hbox.addWidget(QLabel("Replace"))
+        lineEdit = QLineEdit()
+        lineEdit.setEnabled(False)
+        hbox.addWidget(lineEdit)
+        for name in ["word", "case", "regexp"]:
+            checkbox = QCheckBox(name)
+            checkbox.setEnabled(False)
+            hbox.addWidget(checkbox)
+        hbox.addWidget(label)
+        searchBox = QWidget()
+        self.searchBox = searchBox
+        searchBox.setLayout(hbox)
+        searchBox.setVisible(False)
+
+        vbox = QVBoxLayout()
+        vbox.setContentsMargins(0, 0, 0, 0)
+        vbox.addWidget(textEdit)
+        vbox.addWidget(searchBox)
+        
+        hsplitter = QSplitter(Qt.Horizontal)
+        self.hsplitter = hsplitter
+        hsplitter.addWidget(tocTree)
+        widget = QWidget()
+        widget.setLayout(vbox)
+        hsplitter.addWidget(widget)
+        hsplitter.setStretchFactor(1, 20)
+
+        vbox = QVBoxLayout()
+        vbox.setContentsMargins(0, 0, 0, 0)
+        vbox.addWidget(hsplitter)
+
+        self.setLayout(vbox)
+
+        # Always focus on the textEdit first when the DocEditor receives focus
+        self.setTabOrder(textEdit, hsplitter)
+        
+    def eventFilter(self, source, event):
+        logger.info("source %s, event %s", class_name(source), EventTypeString(event.type()))
+        if ((source in [self.textEdit, self.lineEdit]) and qEventIsShortcutOverride(event, "ctrl+f")):
+            logger.info("ShortcutOverride for text %r key %d", event.text(), event.key())
+            event.accept()
+            return True
+
+        elif ((source == self.textEdit) and qEventIsKeyShortcut(event, "ctrl+f")):
+            # XXX Handle F3 as continue search
+            self.searchBox.setVisible(True)
+            self.lineEdit.setFocus(Qt.TabFocusReason)
+            # If there's no selection, select the current word
+            textCursor = self.textEdit.textCursor()
+            if (not textCursor.hasSelection()):
+                textCursor.select(QTextCursor.WordUnderCursor)
+                # Note no need to setTextCursor, not clear why
+            
+            if (textCursor.hasSelection()):
+                self.lineEdit.setText(textCursor.selectedText())
+
+            else:
+                # Do a double change to trigger textChanged and start the search
+                # (single setText to the same vale won't trigger textChanged)
+                text = self.lineEdit.text()
+                self.lineEdit.setText("")
+                self.lineEdit.setText(text)
+            self.lineEdit.selectAll()
+
+            return True
+
+        elif ((source == self.lineEdit) and qEventIsKeyShortcut(event, "esc")):
+            self.textEdit.setFocus(Qt.TabFocusReason)
+            return True
+
+        elif ((source == self.lineEdit) and (event.type() == QEvent.FocusOut)):
+            self.searchBox.setVisible(False)
+            # XXX This should select the selection on the textedit?
+            self.textEdit.setExtraSelections([])
+
+        return False
+
+    def findNext(self, next = True):
+        logger.info("")
+        selections = self.textEdit.extraSelections()
+        delta = 1 if next else -1
+        if (0 <= (self.lastExtraSelection + delta) < len(selections)):
+            # Yellow the previous position, orange the next
+            selection = selections[self.lastExtraSelection]
+            selection.format.setBackground(Qt.yellow)
+            self.lastExtraSelection += delta
+            selection = selections[self.lastExtraSelection]
+            selection.format.setBackground(QColor("orange"))
+
+            self.textEdit.setExtraSelections(selections)
+            self.counterLabel.setText("%d/%d" % (self.lastExtraSelection + 1, len(selections)))
+
+            # Move to the selection
+            textCursor = QTextCursor(selection.cursor)
+            textCursor.clearSelection()
+            self.textEdit.setTextCursor(textCursor)
+
+    def returnPressed(self):
+        # XXX This is almost replicated with DocBrowser, should have a readonly
+        #     TextEditor and refactor?
+        logger.info("modifiers 0x%x ctrl 0x%x shift 0x%x ", 
+            int(qApp.keyboardModifiers()),
+            int(qApp.keyboardModifiers() & Qt.ControlModifier),
+            int(qApp.keyboardModifiers() & Qt.ShiftModifier)
+        )
+        next = (int(qApp.keyboardModifiers() & Qt.ShiftModifier) == 0)
+        self.findNext(next)
+
+    def textChanged(self, s):
+        logger.info("%s", s)
+        # XXX This is replicated in DocBrowser, create a readonly searcheable
+        #     textedit and refactor
+        pattern = str.join("|", self.lineEdit.text().split())
+        selections = []
+        color = QColor("orange")
+        # XXX This should start searching from the current cursor position, not
+        #     from the start of the document
+        self.textEdit.moveCursor(QTextCursor.Start)
+        while (True):
+            found = self.textEdit.find(QRegExp(pattern, Qt.CaseInsensitive))
+            textCursor = self.textEdit.textCursor()
+            if (not found):
+                # Clear the selection, go to the first occurrence, end
+                if (len(selections) > 0):
+                    textCursor = QTextCursor(selections[0].cursor)
+                    textCursor.clearSelection()
+                    self.textEdit.setTextCursor(textCursor)
+                    self.lastExtraSelection = 0
+                break
+
+            # Use extra selections to highlight matches, this has several
+            # advantages vs. using real formatting (doesn't trigger the
+            # modification flag, no need to block signals, not saved with the
+            # document, simpler code although probably less efficient since all
+            # the extra selections must be set everytime when traversing matches
+            # vs. only the previous and current match if using regular
+            # formatting)
+            selection = QTextEdit.ExtraSelection()
+            selection.cursor = textCursor
+            fmt = textCursor.charFormat()
+            fmt.setBackground(color)
+            selection.format = fmt
+            selections.append(selection)
+            color = Qt.yellow
+
+        self.textEdit.setExtraSelections(selections)
+        self.counterLabel.setText("%d/%d" % (self.lastExtraSelection + 1, len(selections)))
+
+    def modified(self):
+        return self.textEdit.document().isModified()
+
+    def setModified(self, modified):
+        self.textEdit.document().setModified(modified)
+        
+    def getFilepath(self):
+        # XXX Is there any advantage in using metaInformation vs. some new field?
+        url = self.textEdit.document().metaInformation(QTextDocument.DocumentUrl)
+        if (url == ""):
+            return None
+        url = QUrl(url)
+        return url.toLocalFile()
+
+    def setFilepath(self, filepath):
+        if (filepath is not None):
+            url = QUrl.fromLocalFile(filepath)
+            url = url.toString()
+
+        else:
+            url = None
+        self.textEdit.document().setMetaInformation(QTextDocument.DocumentUrl, url)
+
+    def clearText(self):
+        logger.info("")
+        self.textEdit.clear()
+        self.setFilepath(None)
+
+    def loadText(self, filepath):
+        logger.info("%s", filepath)
+        
+        with open(filepath, "rb") as f:
+            content = f.read()
+            self.textEdit.setHtml(content)
+            self.setFilepath(filepath)
+
+    def saveText(self, filepath = None):
+        if (filepath is not None):
+            self.setFilepath(filepath)
+        filepath = self.getFilepath()
+        if (filepath is None):
+            logger.warning("Ignoring saving on empty filepath")
+            return
+
+        logger.info("saving %r", filepath)
+        # XXX This can be saved to other formats using QTextDocumentWriter
+        #     https://www.qtcentre.org/threads/28550-QTextDocument-not-keeping-its-format-when-saving-to-ODF-file
+        #     But there's no QTextDocumentReader
+        #     See https://stackoverflow.com/questions/31958553/qtextdocument-serialization
+        contents = self.textEdit.document().toHtml("utf-8")
+        with open(filepath, "wb") as f:
+            f.write(contents.encode("utf-8"))
+
+
 class DocBrowser(QWidget):
     """
     Documentation browser with HTML browser, filtering/searching, filter/search
@@ -1809,9 +2765,13 @@ class DocBrowser(QWidget):
             self.index = index
 
         lineEdit = QLineEdit(self)
+        self.lineEdit = lineEdit
         lineEdit.setPlaceholderText("Search...")
         listWidget = QListWidget()
+        self.listWidget = listWidget
+        
         tocTree = QTreeWidget()
+        self.tocTree = tocTree
         tocTree.setColumnCount(1)
         tocTree.setHeaderHidden(True)
         
@@ -1821,18 +2781,15 @@ class DocBrowser(QWidget):
         self.curTocItem = None
         self.sourceTitle = ""
         
-        # XXX Have browser zoom, next, prev buttons / keys
+        # XXX Have browser zoom, next, prev buttons / keys, font?
     
         textEdit = QTextBrowser()
+        self.textEdit = textEdit
 
         # Don't focus these on wheel scroll
         textEdit.setFocusPolicy(Qt.StrongFocus)
         listWidget.setFocusPolicy(Qt.StrongFocus)
-        self.textEdit = textEdit
-        self.lineEdit = lineEdit
-        self.listWidget = listWidget
-        self.tocTree = tocTree
-        
+        tocTree.setFocusPolicy(Qt.StrongFocus)
 
         lineEdit.textChanged.connect(self.textChanged)
         lineEdit.returnPressed.connect(self.returnPressed)
@@ -1841,7 +2798,7 @@ class DocBrowser(QWidget):
         listWidget.currentItemChanged.connect(self.listCurrentItemChanged)
         textEdit.sourceChanged.connect(self.browserSourceChanged)
         tocTree.currentItemChanged.connect(self.treeCurrentItemChanged)
-        
+
         test_font = True
         if (test_font):
             # XXX Temporary font mocking, use CSS or such
@@ -1851,7 +2808,7 @@ class DocBrowser(QWidget):
             font.setPointSize(10)
             #font.setWeight(QFont.Bold)
             textEdit.setFont(font)
-
+        
         # QTextEdit can display html but for readonly browsing it's easier to
         # use QTextBrowser since it has navigation implemented out of the box
         # XXX In theory TextBrowser should already be using
@@ -1943,7 +2900,7 @@ class DocBrowser(QWidget):
         return self.sourceTitle
 
     def returnPressed(self):
-        logger.info("returnPressed modifiers 0x%x ctrl 0x%x shift 0x%x ", 
+        logger.info("modifiers 0x%x ctrl 0x%x shift 0x%x ", 
             int(qApp.keyboardModifiers()),
             int(qApp.keyboardModifiers() & Qt.ControlModifier),
             int(qApp.keyboardModifiers() & Qt.ShiftModifier)
@@ -1953,6 +2910,7 @@ class DocBrowser(QWidget):
         findFlags = QTextDocument.FindBackward if (int(qApp.keyboardModifiers() & Qt.ShiftModifier) != 0) else QTextDocument.FindFlag(0)
 
         # Yellow the previously current position
+        # XXX Use extraSelections instead of straight formatting
         fmt = self.lastCursor.charFormat()
         fmt.setBackground(Qt.yellow)
         self.lastCursor.setCharFormat(fmt)
@@ -2215,6 +3173,7 @@ class DocBrowser(QWidget):
 
         # Highlight the search string removing any leading "title:" if
         # present
+        # XXX Use extraSelections instead of straight formatting
         # XXX Lineedit should probably export the list of words being
         #     searched without title:
         pattern = str.join("|", [r"\b%s\b" % w[max(0, w.find("title:")):] for w in self.lineEdit.text().split()])
@@ -2547,7 +3506,7 @@ class ImageWidget(QScrollArea):
             return super(ImageWidget, self).mouseMoveEvent(event)
 
     def eventFilter(self, source, event):
-        logger.debug("source %s type %s", class_name(source), qEventTypeToString(event.type()))
+        logger.debug("source %s type %s", class_name(source), EventTypeString(event.type()))
         # Even if the filter was installed on the viewport, it will receive
         # messages from scrollbars and the label, discard those
         if ((event.type() == QEvent.Wheel) and (source == self.viewport())):
@@ -2645,15 +3604,15 @@ def load_test_scene():
 
 class GraphicsRectNotifyItem(QGraphicsRectItem):
     def itemChange(self, change, value):
-        assert None is logger.debug("change %s value %s", ItemChangeString(change), value)
+        assert None is logger.debug("change %s value %s", GraphicsItemChangeString(change), value)
         # Scene can be none before the item is added to the scene
         if ((self.scene() is not None) and
-            # XXX This is in the hotpath of updateFog/setWallsVisible, and it's
-            #     not clear why VTTGraphicsScene.itemChanged calls updateFog
-            #     even if updates are locked in setWallsVisible, but appears in
-            #     the profiling logs
-            (change not in [QGraphicsItem.ItemZValueHasChanged, QGraphicsItem.ItemZValueChange])):
-            return self.scene().itemChanged(self, change, value)
+             # XXX This is in the hotpath of updateFog/setWallsVisible, and it's
+             #     not clear why VTTGraphicsScene.itemChanged calls updateFog
+             #     even if updates are locked in setWallsVisible, but appears in
+             #     the profiling logs
+             (change not in [QGraphicsItem.ItemZValueHasChanged, QGraphicsItem.ItemZValueChange])):
+             return self.scene().itemChanged(self, change, value)
 
         else:
             return super(GraphicsRectNotifyItem, self).itemChange(change, value)
@@ -2669,7 +3628,7 @@ class GraphicsPixmapNotifyItem(QGraphicsPixmapItem):
     def sceneEventFilter(self, watched, event):
         # The main token item receives events from the label item in order to
         # detect when label editing ends
-        logger.debug("watched %s type %s", class_name(watched), qEventTypeToString(event.type()))
+        logger.debug("watched %s type %s", class_name(watched), EventTypeString(event.type()))
 
         # XXX Would like to focus on enter or double click and ignore single
         #     click, but events received here are the synthetic
@@ -2746,7 +3705,7 @@ class GraphicsPixmapNotifyItem(QGraphicsPixmapItem):
         return rect
 
     def itemChange(self, change, value):
-        logger.debug("change %s value %s", ItemChangeString(change), value)
+        logger.debug("change %s value %s", GraphicsItemChangeString(change), value)
         # Scene can be none before the item is added to the scene
         if (self.scene() is not None):
             return self.scene().itemChanged(self, change, value)
@@ -2847,8 +3806,8 @@ class VTTGraphicsScene(QGraphicsScene):
         """
         This receives notifications from GraphicsPixmapNotifyItem/GraphicsRectNotifyItem
         """
-        logger.debug("change %s", ItemChangeString(change))
-        
+        logger.debug("change %s", GraphicsItemChangeString(change))
+
         if ((change == QGraphicsItem.ItemPositionChange) and self.snapToGrid):
             # value is the new position, snap 
             snap_granularity = self.cellDiameter / 2.0
@@ -2858,7 +3817,7 @@ class VTTGraphicsScene(QGraphicsScene):
             logger.info("Snapping %s to %s", qtuple(value), qtuple(snap_pos))
 
             return snap_pos
-        
+
         if (change == QGraphicsItem.ItemPositionHasChanged):
             if (self.isToken(item)):
                 item.data(0).scene_pos = qtuple(item.scenePos())
@@ -3152,7 +4111,8 @@ class VTTGraphicsScene(QGraphicsScene):
         return token.childItems()[0]
 
     def addWall(self, map_wall, index):
-        logger.info("Adding wall %s", map_wall)
+        # XXX This is high frequency on caverns because of spurious setscene calls
+        assert None is logger.debug("Adding wall %s", map_wall)
         pen = QPen(Qt.cyan)
         wallItem = QGraphicsLineItem(*map_wall)
         # Items cannot be selected, moved or focused while inside a group, the
@@ -3201,7 +4161,8 @@ class VTTGraphicsScene(QGraphicsScene):
                 continue
             wall2 = self.map_scene.map_walls[wallItem2.data(0)]
             if ((wall is not wall2) and (wall[0:2] == wall2[2:4])):
-                logger.info("found p1 twin")
+                # XXX This is high frequency on caverns because of spurious setscene calls
+                assert None is logger.debug("found p1 twin")
                 self.removeItem(handleItem2)
                 self.wallHandleItems.remove(handleItem2)
                 handleItems[0].setData(1, wallItem2)
@@ -3317,7 +4278,7 @@ class VTTGraphicsScene(QGraphicsScene):
         # XXX This should update the fog if done after initialization
 
     def updateFog(self, force=False):
-        logger.info("updateFog force %s dirty %s draw %s blend %s", force, self.fogPolysDirtyCount != self.dirtyCount, self.fogVisible, self.blendFog)
+        logger.info("force %s dirty %s draw %s blend %s", force, self.fogPolysDirtyCount != self.dirtyCount, self.fogVisible, self.blendFog)
         gscene = self
         
         if (gscene.getFogCenter() is None):
@@ -3629,8 +4590,8 @@ class VTTGraphicsView(QGraphicsView):
                 )
                 if (x0 is not None):
                     wall = [x0, y0, x1, y1]
-                    gscene.addWall(wall, len(gscene.map_scene.map_walls))
                     gscene.map_scene.map_walls.append(wall)
+                    gscene.addWall(wall, len(gscene.map_scene.map_walls)-1)
                                         
                 x0, y0 = x1, y1
 
@@ -3748,9 +4709,9 @@ class VTTGraphicsView(QGraphicsView):
             else:
                 # snap then move
 
-                # Snap in case it wasn't snapped before, this will also allow using
-                # the arrow keys to snap to the current cell if the movement is
-                # rejected below
+                # Snap in case it wasn't snapped before, this will also allow
+                # using the arrow keys to snap to the current cell if the
+                # movement is rejected below
                 snap_pos = (focusItem.pos() / snap_granularity).toPoint() * snap_granularity
                 
                 focusItem.setPos(snap_pos)
@@ -3758,26 +4719,27 @@ class VTTGraphicsView(QGraphicsView):
                 # the movement if it crosses one of those
 
                 # Use a bit of slack to avoid getting stuck in the intersection
-                # point due to floating point precision issues, don't use too much
-                # (eg. 1.5 or more) or it will prevent from walking through tight
-                # caves
+                # point due to floating point precision issues, don't use too
+                # much (eg. 1.5 or more) or it will prevent from walking through
+                # tight caves
                 
-                # XXX Note this doesn't take the size into account, can get tricky
-                #     for variable size tokens, since proper intersection
+                # XXX Note this doesn't take the size into account, can get
+                #     tricky for variable size tokens, since proper intersection
                 #     calculation requires capsule-line intersections
                 
-                # XXX This doesn't guarantee that there's a given separation between
-                #     token and wall, eg by moving the token vertically, it could
-                #     start moving parallel to a vertical wall that is just at the
-                #     token position (since moving vertically won't collide against 
-                #     vertical walls unless they are completely edge on). Needs to
-                #     check distance to line or similar?
+                # XXX This doesn't guarantee that there's a given separation
+                #     between token and wall, eg by moving the token vertically,
+                #     it could start moving parallel to a vertical wall that is
+                #     just at the token position (since moving vertically won't
+                #     collide against vertical walls unless they are completely
+                #     edge on). Needs to check distance to line or similar?
                 l = QLineF(snap_pos, snap_pos + delta * 1.25)
 
                 # Note walls are lines, not polys so need to check line to line
                 # intersection instead of poly to line. Even if that wasn't the
-                # case, PolygonF.intersect is new in Qt 5.10 which is not available
-                # on this installation, so do only line to line intersection
+                # case, PolygonF.intersect is new in Qt 5.10 which is not
+                # available on this installation, so do only line to line
+                # intersection
                 i = QLineF.NoIntersection
                 for wall_item in gscene.walls():
                     i = l.intersect(wall_item.line(), None)
@@ -3919,7 +4881,7 @@ class VTTGraphicsView(QGraphicsView):
 
             
     def eventFilter(self, source, event):
-        logger.debug("source %s type %s", class_name(source), qEventTypeToString(event.type()))
+        logger.debug("source %s type %s", class_name(source), EventTypeString(event.type()))
 
         return super(VTTGraphicsView, self).eventFilter(source, event)
 
@@ -3966,8 +4928,47 @@ class VTTMainWindow(QMainWindow):
         
         tree = QTreeWidget()
         self.tree = tree
+        # Don't focus this on wheel scroll
+        tree.setFocusPolicy(Qt.StrongFocus)
         tree.itemChanged.connect(self.treeItemChanged)
         tree.itemActivated.connect(self.treeItemActivated)
+
+
+        self.docEditor = DocEditor()
+        textEditor = self.docEditor.textEdit
+        self.textEditor = textEditor
+
+        def cursorPositionChanged(editor):
+            logger.info("")
+
+            hLevel = editor.textCursor().charFormat().property(QTextFormat.FontSizeAdjustment)
+            if (hLevel is not None):
+                hLevel = "<h%d>" % (3 - hLevel + 1)
+            else:
+                hLevel = "<p>"
+
+            hasRuler = (editor.textCursor().blockFormat().property(QTextFormat.BlockTrailingHorizontalRulerWidth) is not None)
+            # XXX Missing some stats? (chars, blocks, bytes, images, tables, sizes)
+            # XXX Missing indent
+            s = "%s %d %s%s%s%s%s %s" % (
+                editor.fontFamily(), editor.fontPointSize(), hLevel,
+                " <b>" if (editor.fontWeight() == QFont.Bold) else "",
+                " <i>" if editor.fontItalic() else "", 
+                " <u>" if editor.fontUnderline() else "", 
+                " <hr>" if hasRuler else "",
+                qAlignmentFlagToString(editor.alignment())
+            )
+            # Prevent any char interpreted as HTML tags
+            self.statusScene.setTextFormat(Qt.PlainText)
+            # XXX Missing refreshing on format change
+            self.statusScene.setText(s)
+    
+        def modifiedDocument(editor, changed):
+            logger.info("")
+            self.updateTextTitle(editor, changed)
+            
+        textEditor.document().modificationChanged.connect(lambda changed: modifiedDocument(textEditor, changed))
+        textEditor.cursorPositionChanged.connect(lambda : cursorPositionChanged(textEditor))
 
         for view, title in [
             (self.tree, "Campaign"), 
@@ -3977,25 +4978,11 @@ class VTTMainWindow(QMainWindow):
         ]:
             self.wrapInDockWidget(view, title)
 
-        textEdit = QTextEdit()
-        self.textEdit = textEdit
-        test_font = True
-        if (test_font):
-            # XXX Temporary font mocking, use CSS or such
-            fontId = QFontDatabase.addApplicationFont(os.path.join("_out", "fonts", "Raleway-Regular.ttf"))
-            logger.info("Font Families %s",QFontDatabase.applicationFontFamilies(fontId))
-            font = QFont("Raleway")
-            font.setPointSize(10)
-            #font.setWeight(QFont.Bold)
-            textEdit.setFont(font)
-        textEdit.setTextInteractionFlags(textEdit.textInteractionFlags() | Qt.LinksAccessibleByMouse)
-
-        self.setCentralWidget(self.textEdit)
+        self.setCentralWidget(self.docEditor)
         self.setDockOptions(QMainWindow.AnimatedDocks | QMainWindow.AllowTabbedDocks | QMainWindow.AllowNestedDocks)
 
         qApp.focusChanged.connect(self.focusChanged)
 
-        #self.centralWidget().hide()
         self.setWindowTitle("QtVTT")
 
         # XXX Forcing ini file for the time being for ease of debugging and
@@ -4027,13 +5014,15 @@ class VTTMainWindow(QMainWindow):
             className = settings.value("%s/class" % key)
             uuid = m.group(2)
             # XXX Remove once these are created dynamically
-            if (className in ["ImageWidget", "QTreeWidget", "VTTGraphicsView"]):
+            if (className in ["ImageWidget", "QTreeWidget", "VTTGraphicsView", "DocEditor"]):
                 if (className == "ImageWidget"):
                     self.imageWidget.parent().setObjectName(uuid)
                 elif (className == "QTreeWidget"):
                     self.tree.parent().setObjectName(uuid)
                 elif (className == "VTTGraphicsView"):
                     self.graphicsView.parent().setObjectName(uuid)
+                elif (className == "DocEditor"):
+                    self.docEditor.parent().setObjectName(uuid)
 
                 continue
             title = settings.value("%s/title" % key, "")
@@ -4060,6 +5049,8 @@ class VTTMainWindow(QMainWindow):
         b = settings.value("layout/windowState")
         if (b):
             self.restoreState(b)
+
+        # XXX Missing saving/restoring the textEditor
         
         for browser, key in browser_keys:
             data = settings.value("%s/state" % key)
@@ -4133,16 +5124,17 @@ class VTTMainWindow(QMainWindow):
         self.pasteItemAct = QAction("&Paste Item", self, shortcut="ctrl+v", triggered=self.pasteItem)
         self.deleteItemAct = QAction("&Delete Item", self, shortcut="del", triggered=self.deleteItem)
         self.importDungeonScrawlAct = QAction("Import &Dungeon Scrawl...", self, shortcut="ctrl+a", triggered=self.importDungeonScrawl)
-        self.importTokenAct = QAction("Import &Token...", self, shortcut="ctrl+t", triggered=self.importToken)
+        self.importTokenAct = QAction("Import &Token...", self, shortcut="ctrl+k", triggered=self.importToken)
         self.importImageAct = QAction("Import &Image...", self, shortcut="ctrl+i", triggered=self.importImage)
         self.importMusicAct = QAction("Import &Music Track...", self, shortcut="ctrl+m", triggered=self.importMusic)
         self.importHandoutAct = QAction("Import &Handout...", self, shortcut="ctrl+h", triggered=self.importHandout)
+        self.importTextAct = QAction("Import Te&xt...", self, shortcut="ctrl+t", triggered=self.importText)
         self.clearWallsAct = QAction("Clear All &Walls...", self, triggered=self.clearWalls)
         self.clearDoorsAct = QAction("Clear All &Doors...", self, triggered=self.clearDoors)
         self.clearFogAct = QAction("Clear &Fog of War...", self, shortcut="ctrl+f", triggered=self.clearFog)
         self.copyScreenshotAct = QAction("DM &View &Screenshot", self, shortcut="ctrl+alt+c", triggered=self.copyScreenshot)
         self.copyFullScreenshotAct = QAction("DM &Full Screenshot", self, shortcut="ctrl+shift+c", triggered=self.copyFullScreenshot)
-        self.newCombatTrackerAct = QAction("New Combat Trac&ker", self, shortcut="ctrl+k", triggered=self.newCombatTracker)
+        self.newCombatTrackerAct = QAction("New Combat Trac&ker", self, triggered=self.newCombatTracker)
         self.newEncounterBuilderAct = QAction("New Encounter Buil&der", self, shortcut="ctrl+d", triggered=self.newEncounterBuilder)
         self.newBrowserAct = QAction("New &Browser", self, shortcut="ctrl+b", triggered=self.newBrowser)
         self.lockFogCenterAct = QAction("&Lock Fog Center", self, shortcut="ctrl+l", triggered=self.lockFogCenter, checkable=True)
@@ -4184,6 +5176,7 @@ class VTTMainWindow(QMainWindow):
         editMenu.addAction(self.importTokenAct)
         editMenu.addAction(self.importMusicAct)
         editMenu.addAction(self.importHandoutAct)
+        editMenu.addAction(self.importTextAct)
         editMenu.addSeparator()
         editMenu.addAction(self.cutItemAct)
         editMenu.addAction(self.copyItemAct)
@@ -4324,20 +5317,23 @@ class VTTMainWindow(QMainWindow):
         # XXX Since there are so many setScene spurious calls, keep the focus if
         #     locked across setScene calls. Specifically CombatTracker calls
         #     setScene on every update of combat stats. Also keep the fog mask
-        #     around. Remove once updates are piecemeal. 
+        #     and light range around. Remove once updates are piecemeal. 
         fogCenter = None
         fogMask = None
-        if (self.gscene is not None):
-            if (self.gscene.getFogCenterLocked()):
-                fogCenter = self.gscene.getFogCenter()
-            fogMask = self.gscene.fog_mask
+        lightRange = None
+        gscene = self.gscene
+        if (gscene is not None):
+            if (gscene.getFogCenterLocked()):
+                fogCenter = gscene.getFogCenter()
+            fogMask = gscene.fog_mask
+            lightRange = gscene.getLightRange() 
 
         # XXX Verify if all this old gscene cleaning up is necessary and/or
         #     enough
-        if (self.gscene is not None):
-            self.gscene.clear()
-            self.gscene.setParent(None)
-            self.gscene.fog_polys = []
+        if (gscene is not None):
+            gscene.clear()
+            gscene.setParent(None)
+            gscene.fog_polys = []
         
         gscene = VTTGraphicsScene(scene)
         gscene.setFogColor(self.fogColor)
@@ -4346,6 +5342,8 @@ class VTTMainWindow(QMainWindow):
             gscene.setFogCenter(fogCenter)
         if (fogMask is not None):
             gscene.fog_mask = fogMask
+        if (lightRange is not None):
+            gscene.setLightRange(lightRange)
         gscene.changed.connect(self.sceneChanged)
         # XXX It's not clear the BSP is helping on dynamic scenes with fog
         #     (although the fog is not selectable so it shouldn't be put in the
@@ -4465,6 +5463,9 @@ class VTTMainWindow(QMainWindow):
         scene.map_images = []
         scene.music = []
         scene.handouts = []
+        scene.texts = []
+
+        self.clearText()
 
         self.setScene(scene)
 
@@ -4629,10 +5630,33 @@ class VTTMainWindow(QMainWindow):
         # XXX Use something less heavy handed
         self.setScene(self.scene, self.campaign_filepath)
 
+    def importText(self):
+        dirpath = os.path.curdir if self.campaign_filepath is None else os.path.dirname(self.campaign_filepath)
+        # XXX Get supported extensions from Qt
+        filepath, _ = QFileDialog.getOpenFileName(self, "Import Text", dirpath, "Handouts (*.txt *.rtf *.md *.html *.htm)")
+
+        if ((filepath == "") or (filepath is None)):
+            return
+
+        s = Struct(**{
+            # XXX Fix all the path mess for embedded assets
+            "filepath" :  os.path.relpath(filepath), 
+            "name" : os.path.basename(filepath),
+        })
+
+        
+        self.scene.texts.append(s)
+
+        self.openText(s.filepath)
+
+        # Update the tree and anything that depends on scene.texts
+        # XXX Use something less heavy handed
+        self.setScene(self.scene, self.campaign_filepath)
+
     def importMusic(self):
         dirpath = os.path.curdir if self.campaign_filepath is None else os.path.dirname(self.campaign_filepath)
         # XXX Get supported extensions from Qt
-        filepath, _ = QFileDialog.getOpenFileName(self, "Import Music Track", dirpath, "Music Files (*.mp3 *.ogg)")
+        filepath, _ = QFileDialog.getOpenFileName(self, "Import Music Track", dirpath, "Music Files (*.m4a *.mp3 *.ogg)")
 
         if (filepath == ""):
             filepath = None
@@ -4682,23 +5706,37 @@ class VTTMainWindow(QMainWindow):
                     headers = [
                         # XXX Missing "XP", 
                         "Name", "HD", "HP", "HP_", "AC", "MR", "T0", "#AT", 
-                        "Damage", "Alignment"
+                        "Damage", "Alignment", "Notes"
                     ]
                     for header in headers:
                         # Note QTextEdit uses white on white as header color, so
                         # these won't be visible there
-                        htmlLines.append("<th>%s</th>" % header)
+                        htmlLines.append('<th>%s</th>' % header)
                     htmlLines.append("</tr></thead><tbody>")
 
+                    # Copy all table if there's no selection or only a single
+                    # cell is selected
+                    ranges = table.selectedRanges()
+                    copyAllRows = (
+                        len(ranges) == 0) or (
+                        (len(ranges) == 1) and (ranges[0].rowCount() == 1) and 
+                        (ranges[0].columnCount() == 1)
+                    )
                     for j in xrange(table.rowCount()):
-                        # XXX Check this row is selected or no rows are selected
-                        htmlLines.append("<tr>")
+                        # Note can't check item.isSelected in the header loop
+                        # below because the selected cell may not be one of the
+                        # copied cells
+                        copyThisRow = copyAllRows | any([
+                            table.item(j,i).isSelected() for i in xrange(table.columnCount())])
+                        rowLines = ["<tr>"]
                         for header in headers:
                             item = table.item(j, tracker.headerToColumn[header])
-                                    
-                            htmlLines.append("<td>%s</td>" % item.text())
-                        htmlLines.append("</tr>")
+                            rowLines.append("<td>%s</td>" % item.text())
+                        rowLines.append("</tr>")
 
+                        if (copyThisRow):
+                            htmlLines.extend(rowLines)
+                            
                     htmlLines.append("</tbody></table></body></html>")
                     html = str.join("\n", htmlLines)
                     mimeData = QMimeData()
@@ -4870,6 +5908,7 @@ class VTTMainWindow(QMainWindow):
         dock.setFloating(False)
         dock.setAllowedAreas(Qt.AllDockWidgetAreas)
         dock.setAttribute(Qt.WA_DeleteOnClose)
+        dock.installEventFilter(self)
 
         self.addDockWidget(Qt.TopDockWidgetArea, dock)
 
@@ -5052,7 +6091,7 @@ class VTTMainWindow(QMainWindow):
         self.player.setPosition(newPosition)
 
     def focusChanged(self, old, new):
-        logger.info("")
+        logger.info("from %s to %s", class_name(old), class_name(new))
         if (old is not None):
             dock = self.findParentDock(old)
             if (dock is not None):
@@ -5078,8 +6117,8 @@ class VTTMainWindow(QMainWindow):
                 QDockWidget::title { text-align: left; /* align the text to the
                     left */ background: palette(highlight); padding-left: 5px;
                 }
-                /* Setting the title text color has no effect, set the global
-                color instead */ QDockWidget { color: palette(highlighted-text);
+                /* Setting the title text color has no effect, set the global color instead */
+                QDockWidget { color: palette(highlighted-text);
                 }
             """)
 
@@ -5111,17 +6150,37 @@ class VTTMainWindow(QMainWindow):
                 """)
 
     def focusDock(self, dock):
-        logger.info("Focusing %s", dock.windowTitle())
+        """
+        Focus the given dock (or the central widget if dock is the central widget)
+        """
+        logger.info("Focusing %r %s", dock.windowTitle(), class_name(dock))
         
         # XXX Missing focusing on tab click, see https://stackoverflow.com/questions/51215635/notification-when-qdockwidgets-tab-is-clicked
         #     It's not clear if the above can be used when there are multiple
         #     dockwidgets, the tabbar doesn't seem to have any pointers to the
         #     dock widget?
         # XXX Clicking on empty encounter table swallows ctrl+tab navigation, investigate
-        # XXX Missing ctrl+tab navigation when central widget is focused, investigate
-        dock.show()
-        dock.raise_()
-        dock.widget().setFocus(Qt.TabFocusReason)
+        
+        # Don't do dock stuff if focusing the central widget
+        if (isinstance(dock, QDockWidget)):
+            dock.show()
+            dock.raise_()
+            widget = dock.widget()
+            
+        else:
+            # Don't focus the centralWidget since it will focus on that widget
+            # instead of a focusable child and it's not clear how to make it
+            # focus on the proper child automatically (looks like focusing on
+            # the central widget programmatically won't focus on the first
+            # focusable child, an extra tab keypress is needed to focus it).
+            # Trying to find the first focusable child with nextInFocusChain
+            # doesn't seem to work
+            
+            # XXX Find out what the problem is, don't hardcode and assume the
+            #     centralWidget is the docEditor
+            widget = dock.textEdit
+            
+        widget.setFocus(Qt.TabFocusReason)
 
     def findParentDock(self, widget):
         logger.info("")
@@ -5223,48 +6282,49 @@ class VTTMainWindow(QMainWindow):
         focusedDock.close()
 
     def prevWindow(self):
-        # XXX Ideally this should prev to the prev tab and only to the prev
-        #     window once done with tabs?
-        logger.info("current widget %s", self.focusWidget().windowTitle())
+        logger.info("Focused widget %r %s", self.focusWidget().windowTitle(), class_name(self.focusWidget()))
         focusedDock = self.findFocusedDock()
 
-        if (focusedDock is not None):
-            logger.info("Parent dock %r", focusedDock.windowTitle())
+        centralWidget = self.centralWidget()
+        if (focusedDock is None):
+            focusedDock = centralWidget
+            
+        logger.info("Focused dock %r", focusedDock.windowTitle())
 
-            prev = None
-            docks = self.getDocksInTabOrder()
-            for dock in docks:
-                logger.info("Found dock %s focus %s widget %s" % (dock.windowTitle(), dock.hasFocus(), dock.widget().hasFocus()))
-                if (dock is focusedDock):
-                    if (prev is None):
-                        prev = docks[-1]
-                    self.focusDock(prev)
-                    
-                    break
-                prev = dock
+        prev = None
+        docks = [centralWidget] + self.getDocksInTabOrder()
+        for dock in docks:
+            logger.info("Found dock %r focus %s" % (dock.windowTitle(), dock.hasFocus()))
+            if (dock is focusedDock):
+                if (prev is None):
+                    prev = docks[-1]
+                self.focusDock(prev)
+                
+                break
+            prev = dock
 
     def nextWindow(self):
-        # XXX Ideally this should next to the next tab and only to the next
-        #     window once done with tabs?
-        logger.info("current %s", self.focusWidget().windowTitle())
-
+        logger.info("Focused widget %r %s", self.focusWidget().windowTitle(), class_name(self.focusWidget()))
         focusedDock = self.findFocusedDock()
 
-        if (focusedDock is not None):
-            logger.info("Focused dock %r", focusedDock.windowTitle())
+        centralWidget = self.centralWidget()
+        if (focusedDock is None):
+            focusedDock = centralWidget
 
-            prev = None
-            docks = self.getDocksInTabOrder()
-            for dock in docks:
-                logger.info("Found dock %s focus %s widget %s" % (dock.windowTitle(), dock.hasFocus(), dock.widget().hasFocus()))
-                if ((prev is focusedDock) or (dock is docks[-1])):
-                    if (prev is not focusedDock):
-                        dock = docks[0]
-                    self.focusDock(dock)
-                        
-                    break
-                prev = dock
-            
+        logger.info("Focused dock %r", focusedDock.windowTitle())
+
+        prev = None
+        docks = [centralWidget] + self.getDocksInTabOrder()
+        for dock in docks:
+            logger.info("Found dock %r focus %s" % (dock.windowTitle(), dock.hasFocus()))
+            if ((prev is focusedDock) or (dock is docks[-1])):
+                if (prev is not focusedDock):
+                    dock = docks[0]
+                self.focusDock(dock)
+                    
+                break
+            prev = dock
+        
     def loadScene(self, filepath):
         self.showMessage("Loading %r" % filepath)
 
@@ -5305,8 +6365,18 @@ class VTTMainWindow(QMainWindow):
         scene.map_images = [Struct(**map_image) for map_image in js["map_images"]]
         scene.music = [Struct(**track) for track in js.get("music", [])]
         scene.handouts = [Struct(**handout) for handout in js.get("handouts", [])]
+        scene.texts = [Struct(**text) for text in js.get("texts", [])]
 
         self.setScene(scene, filepath)
+
+        # Load the first text in the docEditor
+        # XXX This only makes sense if the central widget is used as docEditor,
+        #     otherwise it should be done with the dockwidget save & restore 
+        if (len(scene.texts) > 0):
+            self.openText(scene.texts[0].filepath)
+
+        else:
+            self.clearText()
 
         self.showMessage("Loaded %r" % filepath)
 
@@ -5388,6 +6458,20 @@ class VTTMainWindow(QMainWindow):
             subfolder_item.setData(0, Qt.UserRole, handout)
             subfolder_item.setFlags(subfolder_item.flags() | Qt.ItemIsEditable)
             item = QTreeWidgetItem(["%s" % handout.filepath])
+            subfolder_item.addChild(item)
+            
+            folder_item.addChild(subfolder_item)
+
+        texts = getattr(self.scene, "texts", [])
+        folder_item = QTreeWidgetItem(["Texts (%d)" % len(texts)])
+        scene_item.addChild(folder_item)
+        folder_item.setExpanded(True)
+        for text in texts:
+            # XXX This should star if the item has been modified?
+            subfolder_item = QTreeWidgetItem([text.name])
+            subfolder_item.setData(0, Qt.UserRole, text)
+            subfolder_item.setFlags(subfolder_item.flags() | Qt.ItemIsEditable)
+            item = QTreeWidgetItem(["%s" % text.filepath])
             subfolder_item.addChild(item)
             
             folder_item.addChild(subfolder_item)
@@ -5488,8 +6572,18 @@ class VTTMainWindow(QMainWindow):
         d["music"] = [vars(track) for track in d.get("music", [])]
 
         # Collect handouts as dicts instead of Structs
-        filepaths |= set([handout.filepath for handout in d.get("handout", [])])
+        filepaths |= set([handout.filepath for handout in d.get("handouts", [])])
         d["handouts"] = [vars(handout) for handout in d.get("handouts", [])]
+
+        # XXX This assumes there's one and only one doceditor and that it has
+        #     valid contents, save before saving the texts since if the text
+        #     doesn't have a filepath, it will create a text entry
+        self.saveText()
+
+        # Collect text as dicts instead of Structs
+        filepaths |= set([text.filepath for text in d.get("texts", [])])
+        d["texts"] = [vars(text) for text in d.get("texts", [])]
+        
 
         # Collect doors as dicts instead of Structs
         d["map_doors"] = [vars(door) for door in d["map_doors"]]
@@ -5846,19 +6940,9 @@ class VTTMainWindow(QMainWindow):
                 sceneRect = token_item.sceneBoundingRect()
 
                 imformat = "PNG"
-                ba = QByteArray()
-                buff = QBuffer(ba)
-                buff.open(QIODevice.WriteOnly) 
                 pixItem = gscene.getTokenPixmapItem(token_item)
                 pix = pixItem.pixmap()
-                ok = pix.save(buff, imformat)
-                assert ok
-                g_img_bytes = ba.data()
-                import base64
-
-                base64_utf8_str = base64.b64encode(g_img_bytes).decode('utf-8')
-
-                dataurl = 'data:image/png;base64,%s' % base64_utf8_str
+                dataurl = qImageToDataUrl(pix, imformat)
                 label_item = gscene.getTokenLabelItem(token_item)
 
                 f.write('<g class="draggable-group" transform="translate(%f,%f) scale(%f)"><image href="%s" width="%f" height="%f"/><text fill="white" font-size="10" font-family="Arial, Helvetica, sans-serif" transform="translate(%f,%f) scale(%f)">%s</text></g>\n' %
@@ -6151,26 +7235,97 @@ class VTTMainWindow(QMainWindow):
 
         gscene.setLockDirtyCount(False)
 
+    def updateTextTitle(self, editor, modified):
+        # Remove or append the modified indicator on the title
+        dock = self.findParentDock(editor)
+        if (dock is None):
+            dock = self
+        title = dock.windowTitle()
+        if (not modified and title.endswith("*")):
+            title = title[:-1]
+            dock.setWindowTitle(title)
+        
+        elif (modified and not title.endswith("*")):
+            title = title + "*"
+            dock.setWindowTitle(title)
+
+        if (not modified):
+            self.docEditor.setModified(False)
+
+    def clearText(self):
+        logger.info("")
+        self.docEditor.clearText()
+        self.updateTextTitle(self.docEditor.textEdit, False)
+
+    def openText(self, filepath):
+        logger.info("%s", filepath)
+        # XXX If docEditor is in a dock this could open in a new dock if ctrl
+        #     is pressed like the DocBrowser, etc
+        self.docEditor.loadText(filepath)
+        # Loading the text in the editor sets the modified indicator, remove and
+        # update title
+        self.updateTextTitle(self.docEditor.textEdit, False)
+
+    def saveText(self):
+        logger.info("")
+
+        if (not self.docEditor.modified()):
+            logger.info("Not saving unmodified text %r", self.docEditor.getFilepath())
+            return
+
+        # If there's no filepath for this text and it has been modified, ask for
+        # one
+        filepath = self.docEditor.getFilepath()
+        if (filepath is None):
+            filepath = os.path.join("_out", "documents", "campaign.html")
+            filepath, _ = QFileDialog.getSaveFileName(self, "Save Text", filepath, "Text (*.html)")
+
+            if (filepath is not None):
+                # XXX This is called from saveScene, so there's no setScene
+                #     and shouldn't be done here since other places (tree, etc)
+                #     don't update
+                s = Struct(**{
+                    # XXX Fix all the path mess for embedded assets
+                    "filepath" :  os.path.relpath(filepath), 
+                    "name" : os.path.basename(filepath),
+                })
+                self.scene.texts.append(s)
+
+        if ((filepath == "") or (filepath is None)):
+            logger.info("Not saving None filepath")
+            return
+
+        self.docEditor.saveText(filepath)
+        # Remove the modified indicator
+        self.updateTextTitle(self.docEditor.textEdit, False)
+
     def treeItemActivated(self, item):
         logger.info("%s", item.text(0))
 
-        # If the tree text is an existing filename or the data has a filepath
-        # field, open it with the associated app
-        
-        # XXX Initially this is a rule for handouts (name or filepath), but also
-        #     works for other scene items that have a filepath field (tokens,
-        #     images, tracks). Should check the type instead of blindly probing
-        #     for filepaths?
-        filepath = item.text(0)
-        if (not os.path.exists(filepath)):
-            filepath = getattr(item.data(0, Qt.UserRole), "filepath", None)
-            if ((filepath is not None) and (not os.path.exists(filepath))):
-                filepath = None
+        data = item.data(0, Qt.UserRole)
+        if (data in self.scene.texts):
+            filepath = data.filepath
+            self.openText(filepath)
 
-        if (filepath is not None):
-            logger.info("Launching %r with preferred app", filepath)
-            self.showMessage("Launching %r" % filepath)
-            qLaunchWithPreferredAp(filepath)
+        else:
+            # If the tree text is an existing filename or the data has a filepath
+            # field, open it with the associated app
+            
+            # XXX Initially this is a rule for handouts (name or filepath), but also
+            #     works for other scene items that have a filepath field (tokens,
+            #     images, tracks). Should check the type instead of blindly probing
+            #     for filepaths?
+            
+            filepath = item.text(0)
+            if (not os.path.exists(filepath)):
+                filepath = getattr(item.data(0, Qt.UserRole), "filepath", None)
+                if ((filepath is not None) and (not os.path.exists(filepath))):
+                    filepath = None
+
+            if (filepath is not None):
+                logger.info("Launching %r with preferred app", filepath)
+                self.showMessage("Launching %r" % filepath)
+                qLaunchWithPreferredAp(filepath)
 
     def treeItemChanged(self, item, column):
         logger.info("%s %d", item.text(0), column)
@@ -6311,7 +7466,7 @@ class VTTMainWindow(QMainWindow):
             self.statusScene.setText(s)
     
     def eventFilter(self, source, event):
-        logger.debug("source %r type %s", class_name(source), qEventTypeToString(event.type()))
+        logger.debug("source %r type %s", class_name(source), EventTypeString(event.type()))
         
         if ((event.type() == QEvent.KeyPress) and (source is self.imageWidget)):
             logger.info("text %r key %d", event.text(), event.key())
@@ -6334,6 +7489,18 @@ class VTTMainWindow(QMainWindow):
                     dock.setFloating(True)
                     dock.setWindowState(Qt.WindowMaximized)
                     self.imageWidget.setFitToWindow(True)
+
+        elif ((event.type() == QEvent.MouseButtonPress) and 
+            isinstance(source, QDockWidget) and (not source.widget().hasFocus())):
+            # Focus on the dock if clicked on titlebar, note there's no api to
+            # access the default titlebar, so just focus if clicked on the dock
+            # but outside of the widget
+            logger.info("Dock click %d,%d %r %s %s focused %s", event.x(), event.y(),
+                source.windowTitle(), source.frameGeometry(), source.widget().frameGeometry(),
+                source.widget().hasFocus())
+            if (not source.widget().frameGeometry().contains(event.x(), event.y())):
+                logger.info("Focusing dock widget %r", source.widget().windowTitle())
+                self.focusDock(source)
             
         return super(VTTMainWindow, self).eventFilter(source, event)
 
@@ -6341,7 +7508,7 @@ class VTTMainWindow(QMainWindow):
 def main():
     report_versions()
     thread.start_new_thread(server_thread, (None,))
-
+    
     app = QApplication(sys.argv)
     ex = VTTMainWindow()
     ex.show()

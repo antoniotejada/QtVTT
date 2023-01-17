@@ -38,6 +38,10 @@ Virtual Table Top written in Python and Qt
 
 ![image](https://user-images.githubusercontent.com/6446344/210600981-3d17424b-45d8-49dd-a153-a6ebdde90abf.png)
 
+### Text Editor with search, blockquote, text formats, lists, image, table
+
+![image](https://user-images.githubusercontent.com/6446344/212781083-99da78f7-7358-4639-b947-14704dcf7ca5.png)
+
 ## Videos
 
 
@@ -78,8 +82,8 @@ https://user-images.githubusercontent.com/6446344/209599973-5bc5334e-0cb4-4e40-a
 - Creating, loading and saving scenes (editing walls and doors not yet
   supported)
 - Creating circular walls
-- Importing images, tokens, music, handouts
-- Deleting tokens, images, walls, doors, music, handouts
+- Importing images, tokens, music, handouts, texts
+- Deleting tokens, images, walls, doors, music, handouts, texts
 - Cut, copy, and paste selected tokens
 - Editing token labels
 - DM fulll and view screenshots
@@ -97,6 +101,9 @@ https://user-images.githubusercontent.com/6446344/209599973-5bc5334e-0cb4-4e40-a
 - Token center label with initiative order
 - Shared and private handouts
 - Edit walls
+- Text editor for adventure script, with realtime table of contents, search,
+  (some) markdown tag and keyboard shortcut formatting support, tables, and
+  images.
 
 ### HTTP server
 - Visualize player's view with line of sight
@@ -111,6 +118,13 @@ https://user-images.githubusercontent.com/6446344/209599973-5bc5334e-0cb4-4e40-a
 - Python 2.7
 - PyQt5
 
+## Installation
+- Won't work as is yet, will fail to run due to missing (copyrighted) AD&D 2E
+  data files, and hardcoded asset (fonts, default token...) and saving directory
+  structure.
+- Shouldn't be hard to hack to run with few changes, but functionality dependent
+  on those AD&D 2E data files will fail (Documentation Browser, Encounter
+  Builder, Combat Tracker...)
 
 ## Todo 
 ### Main app
@@ -126,7 +140,7 @@ https://user-images.githubusercontent.com/6446344/209599973-5bc5334e-0cb4-4e40-a
   videos from DungeonDraft or Fantasy Grounds Unity using eg XBOX game bar)
 - Use backfacing lines to project the fog, should give a more natural fog for trees, terrain, etc?
 - Export to Dungeon Scrawl for re-rendering (even re-render under the hood?) 
-- Music objects, area, fading in / out, shuffle, ordered (see https://tabletopaudio.com/)
+- Music objects, area, fading in / out, shuffle, ordered (see https://tabletopaudio.com/, https://www.youtube.com/@bardify)
 - Hide/Show objects (secret doors, one way walls, secret areas, fogged areas,
   etc)
 - Layers, groups, stack objects up/down
@@ -136,13 +150,15 @@ https://user-images.githubusercontent.com/6446344/209599973-5bc5334e-0cb4-4e40-a
 - Image/token browser
 - Shared pointers and ephemeral drawing 
 - Wall, door, token, image, drawing, fog zone, creation/deletion
-- Permanent drawing (spell areas, fire splash, game-clock timer areas, grids, etc)
+- Permanent drawing (spell areas, fire splash, game-clock timer areas, grids,
+  etc)
 - Measurement tools (cone, circle, line, square)
 - Token states/stats/heading (stunned, game-clock timers, etc)
 - Campaign/scenes management
 - Copy paste of any object
-- Text editor with markdown editing with cross links/embedded tools (scenes,
-  random tables, monsters, etc)
+- Cross links/embedded tools in text editor (scenes, random tables, monsters,
+  etc)
+- Markdown text import/edit
 - Undo/redo
 - Record playing/combat history
 - Dice rolling
