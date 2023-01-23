@@ -38,9 +38,9 @@ Virtual Table Top written in Python and Qt
 
 ![image](https://user-images.githubusercontent.com/6446344/210600981-3d17424b-45d8-49dd-a153-a6ebdde90abf.png)
 
-### Text Editor with search, blockquote, text formats, lists, image, table
+### Text Editor with outline, search, blockquote, text formats, headings, lists, image, table
 
-![image](https://user-images.githubusercontent.com/6446344/212781083-99da78f7-7358-4639-b947-14704dcf7ca5.png)
+![image](https://user-images.githubusercontent.com/6446344/212931148-85ed2f4b-0dfc-460f-8dfb-6a0f5a398e05.png)
 
 ## Videos
 
@@ -60,6 +60,11 @@ https://user-images.githubusercontent.com/6446344/208662246-48a0f31f-b2f3-45e3-9
 ### Line of sight, fog of war, light range
 
 https://user-images.githubusercontent.com/6446344/209599973-5bc5334e-0cb4-4e40-ab0f-aa14b97c793c.mp4
+
+### Setting up walls fron scratch, editing walls to add openings
+
+https://user-images.githubusercontent.com/6446344/213870729-844c23c7-9998-4427-979b-842faaaab076.mp4
+
 
 ## Features
 
@@ -81,7 +86,6 @@ https://user-images.githubusercontent.com/6446344/209599973-5bc5334e-0cb4-4e40-a
 - Scene tree window
 - Creating, loading and saving scenes (editing walls and doors not yet
   supported)
-- Creating circular walls
 - Importing images, tokens, music, handouts, texts
 - Deleting tokens, images, walls, doors, music, handouts, texts
 - Cut, copy, and paste selected tokens
@@ -100,10 +104,11 @@ https://user-images.githubusercontent.com/6446344/209599973-5bc5334e-0cb4-4e40-a
 - Token tooltips with hit points, AC, THAC0, etc
 - Token center label with initiative order
 - Shared and private handouts
-- Edit walls
+- Create and edit walls, add points after a given point, remove a point, split wall in two, remove empty walls
 - Text editor for adventure script, with realtime table of contents, search,
   (some) markdown tag and keyboard shortcut formatting support, tables, and
   images.
+- Grid cell size resizing
 
 ### HTTP server
 - Visualize player's view with line of sight
@@ -150,6 +155,7 @@ https://user-images.githubusercontent.com/6446344/209599973-5bc5334e-0cb4-4e40-a
 - Image/token browser
 - Shared pointers and ephemeral drawing 
 - Wall, door, token, image, drawing, fog zone, creation/deletion
+- Wall edit help via CV edge detection
 - Permanent drawing (spell areas, fire splash, game-clock timer areas, grids,
   etc)
 - Measurement tools (cone, circle, line, square)
