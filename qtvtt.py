@@ -80,9 +80,17 @@ def setup_logger(logger):
 
 logger = logging.getLogger(__name__)
 setup_logger(logger)
-#logger.setLevel(logging.DEBUG)
-logger.setLevel(logging.WARNING)
+logger.setLevel(logging.DEBUG)
+#logger.setLevel(logging.WARNING)
 #logger.setLevel(logging.INFO)
+
+try:
+    import numpy as np
+    
+except:
+    logger.warning("numpy not installed, image filters disabled")
+    np = None
+
 
 class Struct:
     """
@@ -115,14 +123,15 @@ class JSONStructEncoder(json.JSONEncoder):
 def report_versions():
     logger.info("Python version: %s", sys.version)
 
-    # Numpy is only needed to apply gamma correction
+    # Numpy is only needed to apply edge detection filters for automatic wall 
+    # generation
     np_version = "Not installed"
     try:
         import numpy as np
         np_version = np.__version__
         
     except:
-        warn("numpy not installed, image filters disabled")
+        logger.warning("numpy not installed, automatic wall generation disabled")
     logger.info("Numpy version: %s", np_version)
     
 
@@ -185,6 +194,18 @@ def os_copy(src_filepath, dst_filepath):
         while (chunk != ""):
             chunk = f_src.read(chunk_size)
             f_dst.write(chunk)
+
+def os_path_name(path):
+    """
+    Return name from dir1/dir2/name.ext
+    """
+    return os.path.splitext(os.path.basename(path))[0]
+
+def os_path_ext(path):
+    """
+    Return .ext from dir1/dir2/name.ext
+    """
+    return os.path.splitext(path)[1]
 
 def os_path_normall(path):
     return os.path.normcase(os.path.normpath(path))
@@ -276,6 +297,26 @@ def find_parent(ancestor, item):
 
 def class_name(o):
     return o.__class__.__name__
+
+def math_norm(v):
+    return math.sqrt(v[0] ** 2 + v[1] ** 2)
+
+def math_subtract(v, w):
+    return (v[0] - w[0], v[1] - w[1])
+
+def math_dotprod(v, w):
+    return (v[0] * w[0] + v[1] * w[1])
+
+def bytes_to_data_url(bytes):
+    import base64
+
+    base64_image = base64.b64encode(bytes).decode('utf-8')
+    # XXX This assumes it's a png (note that at least QTextEdit doesn't care and 
+    #     renders jpegs too even if declared as image/png)
+    data_url = 'data:image/png;base64,%s' % base64_image
+
+    return data_url
+
 
 def qSizeToPointF(size):
     return QPointF(size.width(), size.height())
@@ -403,8 +444,6 @@ def qImageToDataUrl(imageOrPixmap, imageFormat):
     This works for both QImage and QPixmap because both have the same save
     member function
     """
-    import base64
-
     ba = QByteArray()
     buff = QBuffer(ba)
     buff.open(QIODevice.WriteOnly) 
@@ -412,8 +451,7 @@ def qImageToDataUrl(imageOrPixmap, imageFormat):
     assert ok
     imgBytes = ba.data()
 
-    base64Image = base64.b64encode(imgBytes).decode('utf-8')
-    dataUrl = 'data:image/png;base64,%s' % base64Image
+    dataUrl = bytes_to_data_url(imgBytes)
 
     return dataUrl
 
@@ -440,6 +478,679 @@ def qEventIsShortcutOverride(event, shortcut_or_list):
         return qEventIsShortcut(event, shortcut_or_list)
     else:
         return False
+
+
+save_np_debug_images = False
+def np_save(a, filepath):
+    h, w = a.shape[0:2]
+    bits = None
+    byte_stride = None
+    format = None
+
+    # Convert data type
+    if (a.dtype == 'bool'):
+        a = a * 255
+
+    elif (a.dtype in ['float32', 'float64']):
+        # Assumes range 0 to 1
+        a = a * 255.0
+
+    # Note astype copies by default
+    a = a.astype(np.uint8)
+
+    # Convert data dimensions
+    if ((len(a.shape) == 2) or (a.shape[2] == 1)):
+        # Expand one component to three
+        # XXX This version of qt has no grayscale8 or grayscale16, replicate to
+        #     RGB8
+        a = np.repeat(a, 3).reshape((h, w, 3))
+        
+    assert len(a.shape) == 3
+    assert a.shape[2] in [3, 4]
+    assert a.dtype == 'uint8'
+    
+    format = QImage.Format_RGB888 if (a.shape[2] == 3) else QImage.Format_RGBA8888
+    image = QImage(a.data, w, h, a.shape[2] * w, format)
+
+    image.save(filepath)
+
+def np_saveset(a, s, value, filepath):
+    # Note astype copies by default
+    b = a.astype(np.uint8) 
+    
+    # For some reason b[np.array(list(s)).T] doesn't work (tries
+    # to use the arrays as if not transposed) it needs to be
+    # copied to intermediate arrays and then used as indices
+    j, i = np.array(list(s)).T
+    b[j, i] = value
+    np_save(b, filepath)
+
+def np_pixmaptoarray(pixmap):
+    image = pixmap.toImage()
+    pixels = image.constBits().asstring(image.height() * image.bytesPerLine())
+    w = image.width()
+    h = image.height()
+    
+    # XXX Needs to check line stride
+    # XXX Needs non-alpha support
+    a = np.fromstring(pixels, dtype=np.uint8).reshape((h, w, 4)) 
+
+    return a
+
+def np_houghlines(a):
+    """
+    XXX Not really tested
+    """
+    def build_hough_space_fom_image(img, shape = (100, 300), val = 1):
+        hough_space = np.zeros(shape)
+        for i, row in enumerate(img):
+            for j, pixel in enumerate(row):
+                if pixel != val : continue
+                hough_space = add_to_hough_space_polar((i,j), hough_space)
+        return hough_space
+
+    def add_to_hough_space_polar(p, feature_space):
+        space = np.linspace(-np.pi/2.0, np.pi/2.0, len(feature_space))
+        d_max = len(feature_space[0]) / 2
+        for i in range(len(space)):
+            theta = space[i]
+            d = int(p[0] * np.sin(theta) + p[1] * np.cos(theta)) + d_max
+            if (d >= d_max * 2) : continue
+            feature_space[i, d] += 1
+        return feature_space
+
+    shape = (100, 2*int(math.ceil(np.sqrt(a.shape[0]**2 + a.shape[1]**2))))
+
+    hough = build_hough_space_fom_image(a, shape=shape, val=255)
+    # Get sorted indices, increasing values
+    idx = np.dstack(np.unravel_index(np.argsort(hough, axis=None), hough.shape))[0]
+    lines = []
+    for theta, r in idx[-20:]:
+        theta = theta * np.pi / hough.shape[0] - np.pi/2.0 
+        r = r - hough.shape[1]/2.0
+        a = np.cos(theta)
+        b = np.sin(theta)
+        # x0 stores the value rcos(theta)
+        x0 = a*r
+        # y0 stores the value rsin(theta)
+        y0 = b*r
+        # x1 stores the rounded off value of (rcos(theta)-1000sin(theta))
+        x1 = int(x0 + shape[1]*(-b))
+        # y1 stores the rounded off value of (rsin(theta)+1000cos(theta))
+        y1 = int(y0 + shape[1]*(a))
+        # x2 stores the rounded off value of (rcos(theta)+1000sin(theta))
+        x2 = int(x0 - shape[1]*(-b))
+        # y2 stores the rounded off value of (rsin(theta)-1000cos(theta))
+        y2 = int(y0 - shape[1]*(a))
+
+        lines.append((x1, y1, x2, y2))
+        
+    hough *= 255.0 / hough.max()
+    hough = hough.astype(np.uint8)
+
+    if (save_np_debug_images):
+        np_save(hough, os.path.join("_out", "hough.png"))
+
+    return lines
+
+def np_filter(a, kernel):
+    """
+    Convolve the kernel on the array
+
+    The convolution will skip the necessary rows and columns to prevent the
+    kernel sampling outside the image.
+
+    @param numeric or boolean 2D array
+
+    @param kernel numeric or boolean kernel, 2D square array
+
+    @return array resulting of convolving the kernel with the array
+    """
+    logger.info("begin a %s kernel %s", a.shape, kernel.shape)
+    # This method 3secs vs. 2mins for the naive method
+    # See https://stackoverflow.com/questions/2448015/2d-convolution-using-python-and-numpy
+    
+    # apply kernel to image, return image of the same shape, assume both image
+    # and kernel are 2D arrays
+
+    # optionally flip the kernel
+    ## kernel = np.flipud(np.fliplr(kernel))  
+    width = kernel.shape[0]
+    
+    # fill the output array with zeros; do not use np.empty()
+    b = np.zeros(a.shape)  
+    # crop the writes to the valid region (alternatively could pad the source)
+    # - For odd kernel sizes, this will skip the same number of leftmost and
+    #   rightmost columns and topmost and bottomest rows
+    # - For even kernel sizes, this will skip an extra leftmost or topmost
+    #   column/row
+    bb = b[width/2:b.shape[0]-(width-1)/2,width/2:b.shape[1]-(width-1)/2]
+    # shift the image around each pixel, multiply by the corresponding kernel
+    # value and accumulate the results
+    for j in xrange(width):
+        for i in xrange(width):
+            bb += a[j:j+a.shape[0]-width+1, i:i+a.shape[1]-width+1] * kernel[j, i]
+    # optionally clip values exceeding the limits
+    ## np.clip(b, 0, 255, out=b)  
+
+    logger.info("end")
+    
+    return b
+
+def np_naive_filter(a, kernel):
+    logger.info("begin a %s kernel %s", a.shape, kernel.shape)
+    kernel_diameter = kernel.shape[0]
+    # a = a[::4,::4]
+    #a = a[0:a.shape[0]/4, 0:a.shape[1]/4]
+    b = np.zeros(a.shape)
+    kernel = kernel.reshape(-1)
+    sum_kernel = sum(kernel)
+    kernel_diameter2 = kernel_diameter / 2
+
+    for j in xrange(0, a.shape[0] - kernel_diameter + 1):
+        for i in xrange(0, a.shape[1] - kernel_diameter + 1):
+            b[j + kernel_diameter2, i + kernel_diameter2] = (kernel.dot(a[j: j + kernel_diameter, i: i + kernel_diameter].flat) == sum_kernel) * 255
+
+    logger.info("end")
+    if (save_np_debug_images):
+        np_save(b, os.path.join("_out", "filter.png"))
+
+    return b
+
+def np_erode(a, kernel_width):
+    """
+    Apply an erosion operator to the 2D boolean array
+
+    @param a boolean 2D array
+    
+    @param kernel_width width of the erosion kernel to use
+
+    @return boolean 2D array with True on the non eroded elements, False otherwise
+    """
+    logger.info("a %s kernel %s", a.shape, kernel_width)
+
+    kernel = np.ones((kernel_width, kernel_width))
+    kernel_sum = sum(kernel.flat)
+    a = np_filter(a, kernel)
+    a = np.where(a == kernel_sum, True, False)
+    
+    if (save_np_debug_images):
+        np_save(a, os.path.join("_out", "erode.png"))
+
+    return a
+
+def np_graythreshold(a, threshold):
+    # Convert to grayscale
+    ##logger.info("Grayscaling")
+    a = np.dot(a[...,:4], [0.2989, 0.5870, 0.1140, 0]).astype(np.uint8)
+    # Threshold
+    ##logger.info("Thresholding")
+    # XXX This returns an iterator, not an array, change to np.where?
+    a = (a <= threshold)
+
+    if (save_np_debug_images):
+        logger.info("Saving threshold")
+        np_save(a, os.path.join("_out", "threshold.png"))
+
+    return a
+
+def np_bisect_findmaxfiltersize(a, i, j, threshold):
+    """
+    Find the largest nxn erode filter size that fits and contains the provided
+    array coordinate
+
+    @param a boolean array
+
+    @param x,y coordinates to start probing the filter size
+
+    @return int with max filter size 
+    """
+    logger.info("i %d j %d", i, j)
+
+    k = 0
+    kk = 1
+    max_stepsize = 32
+    stepsize = max_stepsize
+    while (True):
+        for jj in xrange(j - kk + 1, j + 1):
+            for ii in xrange(i - kk + 1, i + 1):
+                # XXX Not clear this just in time thresholding is very
+                #     efficient, since it duplicates work already done in the
+                #     previous iteration, maybe it should cache some of the
+                #     thresholding? (just in time thresholding is known to be 
+                #     very beneficial for big maps)
+                b = np_graythreshold(a[jj:jj+kk, ii:ii+kk], threshold)
+                if (b.all()):
+                    k = kk
+                    break
+
+            else:
+                # Filter didn't fit for any ii, try next jj
+                continue
+            # Filter did fit, try next size
+            break
+
+        else:
+            # Filter didn't fit, divide step and try a smaller size
+            if ((stepsize == 0) or (kk == 1)):
+                # kk will be 1 if even the first iteration fails, abort in that
+                # case too
+                break
+            kk -= stepsize
+            stepsize = stepsize / 2
+            continue
+        # Filter did fit, divide step and try a larger size
+        if (stepsize == 0):
+            break
+        kk += stepsize
+        # Can't bisect until the filter fails to fit, otherwise it would only
+        # test as far as max_stepsize*2 - 1 (eg for 16, it would test upto
+        # 16+8+4+2+1=32-1)
+        if (stepsize != max_stepsize):
+            stepsize = stepsize / 2
+
+    logger.info("found max %d", k)
+    return k
+
+def np_findmaxfiltersize(a, i, j, threshold):
+    """
+    Find the largest nxn erode filter size that fits and contains the provided
+    array coordinate
+
+    @param a boolean array
+
+    @param x,y coordinates to start probing the filter size
+
+    @return int with max filter size 
+    """
+    logger.info("i %d j %d", i, j)
+    
+    # XXX Missing padding the original if i, j is too close to the edge or tune
+    #     parameters so that part is not probed?
+    
+    # Find the largest nxn erode filter size that contains the provided array
+    # coordinate (so the provided coordinate can be as early as the top left or
+    # as late as the bottom right of the nxn erode filter)
+    k = 0
+    kk = 1
+    while (True):
+        for jj in xrange(j- kk + 1, j + 1):
+            # Test column by column to be able to restart the search skipping
+            # columns.
+            # XXX This is a dubious optimization, only a perf win vs. the naive
+            #     triple loop in very large k sizes like 64, for sizes around 16
+            #     the naive and non-naive function time is negligible (less
+            #     than the log's default time precision). 
+            ii = iii = i - kk + 1
+            while (ii < (i + 1)):
+                b = np_graythreshold(a[jj:jj+kk,iii], threshold)
+                if (b.all()):
+                    # This column of the filter fits
+                    if (iii == (ii + kk - 1)):
+                        # This is the last column of the filter, record the new
+                        # max filter size and early exit
+                        k = kk
+                        break
+                    # Continue until the last column of the filter size being
+                    # tested is hit
+                    iii += 1
+                else:
+                    # This column doesn't fit at this jj, ii, try the next ii at
+                    # this filter size
+                    ii += 1
+                    iii = ii
+            else:
+                # No early exit, so filter wasn't found at this jj, try next jj
+                continue
+            # Early exit, so this filter size was found to fit, done testing
+            # this j,i at this filter size
+            break
+        else:
+            # The loop didn't early exit, this means a kk x kk containing i,j
+            # coudln't fit, no larger filter sizes containing i,j will fit
+            # either, done
+            break
+        # Try next filter size
+        kk += 1
+    
+    logger.info("found max k %d", k)
+
+    return k
+
+def np_floodfillerode(a, x, y, erosion_diameter):
+    """
+    @param a Boolean ndarray
+
+    @param x,y position inside the ndarray to start flooding
+
+    @param erosion_diameter, flood only if all the pixels in the
+           erosion_diameter / 2, erosion_diameter/2 + 1 are true
+
+    @return Python set of j, i tuples
+    """
+    logger.info("x %d y %d", x, y)
+
+    # XXX This needs to add padding
+    stack = []
+    if (a[y, x]):
+        stack.append((y, x))
+    active = set(stack)
+
+    # Flood fill into the active set
+    logger.info("Flooding")
+    while (len(stack) > 0):
+        pos = stack.pop()
+        # Check the 8 directions
+        # XXX This needs to check there's enough padding for a 3x3 matrix
+        for delta in [(0,1), (1,0), (0,-1), (-1,0), (-1, -1), (-1, 1), (1, -1), (1, 1)]:
+            t = (pos[0] + delta[0], pos[1] + delta[1])
+            # Do just in time eroding
+            # XXX Do just in time scaling too? but just in time
+            #     downscaling complicates things down the line with
+            #     the deltas below? (would be like a sparse flood?)
+            # XXX Do just in time grayscale and thresholding, may not be that
+            #     beneficial because filter stamps overlap and they will be
+            #     applied multiple times for the overlapped regions and those
+            #     are very fast whole image operations
+            if ((t not in active) and
+                # XXX Do bounds checking by having a guardband?
+                ((erosion_diameter / 2) < t[0] < (a.shape[0] - (erosion_diameter / 2))) and
+                ((erosion_diameter / 2) < t[1] < (a.shape[1] - (erosion_diameter / 2))) and
+                (a[
+                    t[0] - erosion_diameter / 2 : t[0] + erosion_diameter / 2 + 1, 
+                    t[1] - erosion_diameter / 2 : t[1] + erosion_diameter / 2 + 1
+                ].all())):
+                    active.add(t)
+                    stack.append(t) 
+    
+    if (save_np_debug_images):
+        logger.info("Saving flood")
+        np_saveset(a, active, 128, os.path.join("_out", "flood.png"))
+
+    return active
+
+def np_findcontourpoints(a, active):
+    """
+    Thin contour using "A fast parallel algorithm for thinning digital patterns"
+    by Zhang Suen '84
+
+    @param a boolean ndarray
+
+    @param active Set of connected coordinates to simplify the contour for
+
+    @returm thinned contour as a set of (j,i) tuples
+    """
+    changes = True
+    even = True
+    iteration = 0
+    cache = dict()
+    cache_misses = 0
+    cache_queries = 0
+    while (changes or not even):
+        logger.info("Contouring %d, %d points" % (iteration, len(active)))
+        erased = set()
+        changes = False
+        for pos in active:
+            # Use a cache to store the results, this ends up having a very high
+            # hit ratio > 99%
+
+            # XXX Could keep the cache across invocations since it's small
+            #     (10-item boolean keys, so 1024 entries) and data-independent
+            # XXX Could also prebuild the cache offline or at startup
+            key = tuple([(pos[0] + (ji / 3) - 1, pos[1] + (ji % 3) - 1) in active for ji in xrange(9)] + [even])
+            erase = cache.get(key, None)
+            cache_queries += 1
+            if (erase is None):
+                cache_misses += 1
+                # Build neighbors array
+                p = []
+                psum = 0
+                dprev = None
+                count01 = 0
+                # XXX This needs to check there's enough padding for a 3x3
+                #     matrix
+                for delta2 in [
+                    (-1, 0), (-1, 1), (0, 1), (1, 1), (1, 0), (1, -1), (0, -1), (-1, -1)
+                    ]:
+                    t = (pos[0] + delta2[0], pos[1] + delta2[1])
+                    d = int(t in active)
+                    p.append(d)
+                    if ((dprev == 0) and (d == 1)):
+                        count01 += 1
+                    dprev = d
+                    psum += d
+                if ((dprev == 0) and (p[0] == 1)):
+                    count01 += 1
+                    
+                # Mark for deletion if
+                erase = (
+                    # 2 <= B(Pi) <= 6, B(Pi) = sum(P2-9)
+                    (2 <= psum <= 6) and
+                    # A(P1) = 1, number of 01 patterns in P2-9
+                    (count01 == 1) and
+                    (
+                        (even and (
+                            # Remove south or east boundary and north-west corner
+                            # P2 * P4 * P6 = 0
+                            ((p[2 - 2] * p[4 - 2] * p[6 - 2]) == 0) and
+                            # P4 * P6 * P8 = 0
+                            ((p[4 - 2] * p[6 - 2] * p[8 - 2]) == 0)
+                        )) or 
+                        ((not even) and (
+                            # Remove north or west boundary or south-east corner
+                            # P2 * P4 * P8 = 0
+                            ((p[2 - 2] * p[4 - 2] * p[8 - 2]) == 0) and
+                            # P2 * P6 * P8 = 0
+                            ((p[2 - 2] * p[6 - 2] * p[8 - 2]) == 0)
+                        )
+                    ))
+                )
+                cache[key] = erase
+
+            if (erase):
+                erased.add(pos)
+                changes = True
+                
+        active = active - erased
+        even = not even
+        if (save_np_debug_images):
+            logger.info("Saving %d points in contour %d" % (len(active), iteration))
+            np_saveset(a, active, 128, os.path.join("_out", "contour%d.png" % iteration))
+        iteration += 1
+
+    logger.info("Contour cache %0.2f%% miss" % (cache_misses * 100.0 / cache_queries))
+    if (save_np_debug_images):
+        logger.info("Saving contour")
+        np_saveset(a, active, 128, os.path.join("_out", "contour.png"))
+
+    return active
+
+def np_connectcontourpoints(a, active):
+    """
+    Connect the points in active set in polylines of lines 1-pixel long.
+
+    The active set is supposed to be a single-pixel-width contour (with or
+    without stair-steps, open or closed)
+
+    @param a bool ndarray 
+
+    @param active set of positions 
+
+    @return list of polylines (list of list of positions) and set of tjunctions
+            (set of positions)
+    """
+    # Collect all the points in the active set into sequential connected points
+
+    # XXX This should also find loops, probably by replicating the last point so
+    #     it can be easily detected later?
+    logger.info("Lining %d points", len(active))
+    polylines = []
+    pos = None
+    processed = set()
+    tjunctions = set()
+    while (len(active) > 0):
+        if (pos is None):
+            pos = active.pop()
+            processed.add(pos)
+            start = pos
+            polyline = [pos]
+            polylines.append(polyline)
+
+        # This purporsefully searches for horizontal and vertical connections
+        # (stair step lines) before diagonal connections (diagonal lines) so
+        # stair-steps are picked before diagonal connections, otherwise isolated
+        # segments walls would appear since the edge thinning generates
+        # stair-steps sometimes instead of diagonals
+        for delta in [(0,1), (1,0), (0,-1), (-1,0), (-1, -1), (-1, 1), (1, -1), (1, 1)]:
+            t = (pos[0] + delta[0], pos[1] + delta[1])
+            if (t in active):
+                processed.add(t)
+                active.remove(t)
+                polyline.append(t)
+                pos = t
+                break
+
+        else:
+            # The line hit an extreme, either change direction or finish this
+            # polyline and start a new one
+
+            # The conversion into polylines, breaks t-junctions (points that are
+            # shared by multiple lines) causing discontinuities. If the polyline
+            # ends in an already-processed point (ie it's a t-junction), link it
+            # to that point so the discontinuity visually disappears
+            pos = polyline[-1]
+            for delta in [(0,1), (1,0), (0,-1), (-1,0), (-1, -1), (-1, 1), (1, -1), (1, 1)]:
+                t = (pos[0] + delta[0], pos[1] + delta[1])
+                # Note polyline can have only one vertex if the
+                # other one is a t-junction
+                if ((t in processed) and ((len(polyline) == 1) or (t != polyline[-2]))):
+                    polyline.append(t)
+                    tjunctions.add(t)
+                    break
+
+            # Walk some other non-starting direction in case the starting point
+            # was in the middle of the line. Note there's no need to store the
+            # starting direction since the neighbors in the starting direction
+            # have been removed (there will be a few wasted delta tests but
+            # that's all)
+            # XXX In case of three or more directions it could try to join the
+            #     longest segments
+            if (start is not None):
+                polyline.reverse()
+                pos = polyline[-1]
+                start = None
+
+            else:
+                pos = None
+    
+    return polylines, tjunctions
+
+def np_coalescepoints(a, polylines, tjunctions, max_coalesce_dist2):
+    """
+    Simplify the polylines
+
+    @param a bool ndarray
+
+    @param polylines
+
+    @param tjunctions
+    
+    @return Simplified polylines
+    """
+    def add_to_hough_space(p, theta_space, feature_space, d_max):
+        d_max2 = d_max * 2
+        # Note these are vector operations
+        d = (p[0] * sin + p[1] * cos).astype(int)
+        d = ((d + d_max) * len(feature_space[0])) / d_max2
+        feature_space[:, d] += 1
+
+        return feature_space
+
+    logger.info("Coalescing %d points %d tjunctions", sum([len(polyline) for polyline in polylines]), len(tjunctions)) 
+    
+    # Coalesce colinear points
+    d_max = int(math.ceil(np.sqrt(a.shape[0]**2 + a.shape[1]**2)))
+    # Quantize the space for better coalescing, the specific values have been
+    # picked empirically from visual inspection
+    # XXX Investigate why quantizing theta doesn't see to work as well as
+    #     quantizing rho
+    shape = (17, (2 * d_max) / 3)
+    theta_space = np.linspace(-np.pi/2.0, np.pi/2.0, shape[0])
+    sin = np.sin(theta_space) 
+    cos = np.cos(theta_space)
+    # Setting this larger than 1 makes corners not accurate enough, so when that
+    # happens in a vertical corner, then the horizontal line will miss the real
+    # wall and it doesn't seem to help enough removing wiggle points from
+    # straight lines
+    max_line_length_diff = 1
+    
+    # Coalesce points that are too close to each other
+    # XXX Coalescing points by proximity is not really well tested with colinear
+    #     removal, seems to remove too many points as is, needs investigating
+    coalesce_walls = False
+    coalesced_walls = 0
+
+    walls = []
+    for polyline_index, polyline in enumerate(polylines):
+        logger.info("Coalescing polyline %d/%d", polyline_index + 1, len(polylines))
+        prevpos = polyline[0]
+        vstart = [0, 0]
+        start = prevpos
+        points = []
+        hough_space = np.zeros(shape)
+        # This will force a flush of the line in the first iteration
+        # XXX Unless distance coalescing is enabled?
+        hough_line_length = max_line_length_diff + 1
+        for pos in polyline[1:]:
+            x1, y1 = pos
+            x0, y0 = prevpos
+
+            if (coalesce_walls and (prevpos not in tjunctions) and (
+                # This edge is small
+                ((x1 - x0) ** 2 + (y1 - y0) ** 2 < max_coalesce_dist2) and
+                # The distance between the start and the end is less than min
+                (((x1 - start[1]) ** 2) + ((y1 - start[0]) ** 2) < max_coalesce_dist2)
+            )):
+                logger.debug("Coalescing %s to %s", (x1, y1), (start[1], start[0]))
+                coalesced_walls += 1
+                prevpos = pos
+                continue
+
+            start = (y1, x1)
+
+            # Force a flush on non-colinear or t-junction (avoid removing
+            # t-junctions since it causes discontinuities)
+            # XXX Could remove a t-junction if all but one joined lines are
+            #     removed?
+
+            # Do colinear tests using a hough space, note that the usual method
+            # of dot product is not that useful because the delta between
+            # consecutive positions is -1, 1 or 0, so there are only 9 possible
+            # values
+            hough_space = add_to_hough_space(pos, theta_space, hough_space, d_max)
+            hough_line_length += 1
+            
+            if (((hough_line_length - hough_space.max()) > max_line_length_diff) or (prevpos in tjunctions)):
+                hough_space = np.zeros(shape)
+                hough_space = add_to_hough_space(pos, theta_space, hough_space, d_max)
+                hough_line_length = 1
+                points.append([prevpos[1], prevpos[0]])
+                ##logger.info("reset hough with pos %s length %d max %d", pos, hough_line_length, hough_space.max())
+
+            else:
+                pass
+                ##logger.info("added pos %s length %d max %d", pos, hough_line_length, hough_space.max())
+                
+            prevpos = pos
+        if ((len(points) <= 1) or (pos != (points[-1][1], points[-1][0]))):
+            points.append([pos[1], pos[0]])
+        walls.append(points)
+
+    logger.info("Walling %d walls, %d points, %d coalesced", len(walls), 
+        sum([len(wall) for wall in walls]), coalesced_walls)
+
+    return walls
+
 
 class NumericTableWidgetItem(QTableWidgetItem):
     """
@@ -568,6 +1279,9 @@ def import_ds_walls(scene, filepath):
         max_coalesce_dist2 = (map_cell_diameter/8.0) ** 2
     coalesced_walls = 0
     coalesce_walls = True
+    coalesce_colinear = True
+    colinear_walls = 0
+    colinear_threshold = 0.2
     for layer in layers:
         shape1_is_polyline = False
         if (ds_version == 1):
@@ -635,58 +1349,87 @@ def import_ds_walls(scene, filepath):
 
         for shape1_index, shape1 in enumerate(shapes):
             shape1_is_door = is_door and (not shape1_is_polyline)
+            
             for shape2 in shape1:
                 points = []
                 x0, y0 = None, None
-
+                vstart = [0, 0]
+                colinear_length = 0
+                
                 if (ds_version == 1):
                     # 25 is the door hinges, 45 is the door pane
                     shape1_is_door = (len(shape2) in [45])
                     
-                for v in shape2:
-                    x1, y1 = v
+                for pos in shape2:
+                    x1, y1 = pos
 
                     if (x0 is not None):
+                        vpos = math_subtract(pos, prevpos)
+                        norm = math_norm(vpos)
+                        vpos = (0, 0) if (norm == 0) else (vpos[0] / norm, vpos[1] / norm)
+                        
+                        # XXX There are also line overlaps, and polylines going
+                        #     back and forth, but overlap removal probably needs
+                        #     to be done at global level and as a preprocess?
+                            
+                        # Remove unnecessary middle points on straight lines, v2
+                        # is known to generate these on polylines
+                        if (coalesce_colinear and 
+                            # Note -1 dotprod means opposite directions,
+                            # coalesce only positive 1 as negative means the
+                            # polyline going back and forth
+                            (math_dotprod(vpos, vstart) > (1.0 - colinear_threshold))):
+                            # XXX Don't remove t-junctions, since there's some
+                            #     threshold it will cause gaps?
+                            logger.debug("Colinear coalescing %s to %s length %d", (x1, y1), start, colinear_length)
+                            
+                            colinear_walls += 1
+                            colinear_length += 1
+                        
+                        else:
+                            colinear_length = 0
+                        
                         # Coalesce walls that are too small, this fixes
                         # performance issues when walls come from free form wall
                         # tool with lots of very small segments
 
                         # Don't coalesce doors as they may have small features
                         # on v1
-                        
-                        # XXX This should also remove unnecessary middle points
-                        #     on straight lines, v2 is known to generate these
-                        #     on polylines
-                        
-                        # XXX There are also line overlaps, but overlap removal
-                        #     probably needs to be done at global level?
                         if (coalesce_walls and (not shape1_is_door) and (
                             # This edge is small
                             ((x1 - x0) ** 2 + (y1 - y0) ** 2 < max_coalesce_dist2) and
                             # The distance between the start and the end is less than min
                             (((x1 - start[0]) ** 2) + ((y1 - start[1]) ** 2) < max_coalesce_dist2)
                         )):
-                            logger.debug("Coalescing %s to %s", (x1, y1), start)
+                            logger.debug("Point coalescing %s to %s", (x1, y1), start)
                             coalesced_walls += 1
 
                         else:
                             x0, y0 = start
-                            if (shape1_is_polyline or shape1_is_door or (v is not shape2[-1])):
-                                # Doors and polylines need the last point,
-                                # polygons replicate the first point in the last
-                                # point, so skip that one for polygons
-                                points.append([x1, y1])
+                            # Doors and polylines need the last point, polygons
+                            # replicate the first point in the last point, so
+                            # skip that one for polygons
+                            if (shape1_is_polyline or shape1_is_door or (pos is not shape2[-1])):
+                                # Keep overwriting colinear points, otherwise
+                                # append
+                                if (colinear_length >= 1):
+                                    points[-1] = [x1, y1]
+
+                                else:
+                                    points.append([x1, y1])
                             
                             start = x1, y1
+                            vstart = vpos
 
                     else:
                         start = x1, y1
                         points.append([x1, y1])
             
                     x0, y0 = x1, y1
+                    prevpos = pos
 
                 # Remove walls/polylines/doors reduced to 0 or 1 points (due to
-                # coalescing or not)
+                # coalescing or otherwise)
                 if (len(points) > 1):
                     if (shape1_is_door):
                         map_doors.append(Struct(points=points, open=False))
@@ -695,8 +1438,8 @@ def import_ds_walls(scene, filepath):
                         map_walls.append(Struct(points=points, closed=not shape1_is_polyline))
             shape1_is_polyline = False
 
-    logger.info("Found %d doors %d valid walls, %d coalesced", len(map_doors), 
-        len(map_walls), coalesced_walls)
+    logger.info("Found %d doors %d valid walls, %d coalesced, %d colinear", len(map_doors), 
+        len(map_walls), coalesced_walls, colinear_walls)
     
     scene.cell_diameter = map_cell_diameter
     scene.map_walls = map_walls
@@ -2079,7 +2822,6 @@ class VTTTextEditor(QTextEdit):
             cursor.mergeCharFormat(fmt)
 
             self.setTextCursor(cursor)
-            self.setCurrentCharFormat(fmt)
 
             # Put the cursor back to where it was
             self.setTextCursor(prevCursor)
@@ -2361,7 +3103,7 @@ class VTTTextEditor(QTextEdit):
                 # XXX Images get pasted as html img tags with the provided url,
                 #     the image needs to be saved separately or converted to
                 #     an embedded data: url
-                root, ext = os.path.splitext(str(u.toLocalFile()))
+                ext = os_path_ext(str(u.toLocalFile()))
                 ext = ext.lower()
                 if (url.isLocalFile() and (ext in IMAGE_EXTENSIONS)):
                     image = QImage(url.toLocalFile())
@@ -3565,7 +4307,7 @@ def load_test_tokens(cell_diameter):
         map_token = Struct()
         map_token.filepath = os.path.join("_out", "tokens", filename)
         map_token.scene_pos = (0.0, 0.0)
-        map_token.name = os.path.splitext(filename)[0]
+        map_token.name = os_path_name(filename)
         map_token.hidden = False
         map_token.ruleset_info = Struct(**default_ruleset_info)
         
@@ -3763,8 +4505,9 @@ class VTTGraphicsScene(QGraphicsScene):
 
         self.allWallsItem = QGraphicsItemGroup()
         self.allDoorsItem = QGraphicsItemGroup()
-        self.fogItem = QGraphicsItemGroup()
         self.gridItem = QGraphicsItemGroup()
+        self.gridHandleItem = None
+        self.fogItem = QGraphicsItemGroup()
         self.fogCenter = None
         self.fogCenterLocked = False
         self.fog_polys = []
@@ -3772,10 +4515,11 @@ class VTTGraphicsScene(QGraphicsScene):
         self.fogColor = None
 
         self.cellDiameter = 70
+        self.cellAnchor = None
+        self.cellOffset = QPointF(0, 0)
         self.snapToGrid = True
         self.gridVisible = True
         self.lightRange = 0.0
-        self.gridHandle = None
 
         self.addItem(self.allWallsItem)
         self.allWallsItem.setZValue(0.1)
@@ -3801,16 +4545,16 @@ class VTTGraphicsScene(QGraphicsScene):
         self.lockDirtyCount += 1 if locked else -1
         assert self.lockDirtyCount >= 0
 
-    def setWallHandlePos(self, wallHandle, pos):
+    def setWallHandleItemPos(self, wallHandleItem, pos):
         """
         Update the wall points wrt to the wall handle position
         """
         scene = self.map_scene
 
-        wallHandle.setPos(pos)
-        p = wallHandle.pos()
-        wallItem = self.getWallItemFromWallHandle(wallHandle)
-        i = self.getPointIndexFromWallHandle(wallHandle)
+        wallHandleItem.setPos(pos)
+        p = wallHandleItem.pos()
+        wallItem = self.getWallItemFromWallHandleItem(wallHandleItem)
+        i = self.getPointIndexFromWallHandleItem(wallHandleItem)
         map_wall = wallItem.data(0)
         map_wall.points[i] = [p.x(), p.y()]
 
@@ -3833,7 +4577,11 @@ class VTTGraphicsScene(QGraphicsScene):
             snapGranularity = self.cellDiameter / 2.0
             if (fineSnapping):
                 snapGranularity /= 10.0
-            snapPos = (pos / snapGranularity).toPoint() * snapGranularity
+            
+            snapOffset = self.cellOffset
+            snapPos = pos - snapOffset
+            snapPos = (snapPos / snapGranularity).toPoint() * snapGranularity 
+            snapPos += snapOffset
             logger.info("Snapping %s to %s", qtuple(pos), qtuple(snapPos))
             
         return snapPos
@@ -3849,22 +4597,40 @@ class VTTGraphicsScene(QGraphicsScene):
         logger.debug("change %s", GraphicsItemChangeString(change))
 
         if (change == QGraphicsItem.ItemPositionChange):
-            # value is the new position, snap 
-            snapPos = self.snapPositionWithCurrentSettings(value)
-
+            
             if (self.isGridHandle(item)):
-                # Set the same value for x and y on grid handles, use any of the
-                # values that change
+                snapPos = value
                 
+                # If Ctrl is pressed, check that:
+                # - The value is snapped so both x,y have the same value
+                # - The value is not smaller than a given minimum grid cell size
                 # XXX Ideally this should set a cell size around 70, values of
                 #     2000 cause high scale values (eg 7000) that significantly
                 #     slow down unnecessarily, but probably due to scenerect
                 #     cascading into the imagewidget and fog of war mask sizes
                 #     so fix there?
-                if (snapPos.x() != item.pos().x()):
-                    snapPos = QPointF(snapPos.x(), snapPos.x())
-                else:
-                    snapPos = QPointF(snapPos.y(), snapPos.y())
+                if (int(qApp.keyboardModifiers() & Qt.ControlModifier) != 0):
+                    # XXX This is not grid-snapping for mouse resizing, should
+                    #     it? (grid snapping for keyboard resizing is done by
+                    #     virtue of increasing by snapping deltas at keypress
+                    #     time)
+                    # cellAnchor is the topleft corner of the grid cell where
+                    # the gridHandle is
+                    delta = value - self.cellAnchor 
+                    # Use the delta in y and ignore the delta in x, this is so
+                    # keyboard resizing works (which can only delta in y since
+                    # ctrl+left/right is swallowed by the media player) as well
+                    # as mouse resizing (which deltas in both x and y)
+                    cellDiameter = delta.y()
+                    # Don't let the cellDiameter become smaller than a minimum
+                    if (cellDiameter <= 5):
+                        logger.info("Rejecting small cellDiameter")
+                        return item.pos()
+                    snapPos = self.cellAnchor + QPointF(cellDiameter, cellDiameter)
+                    
+            else:
+                # value is the new position, snap 
+                snapPos = self.snapPositionWithCurrentSettings(value)
 
             return snapPos
 
@@ -3875,7 +4641,7 @@ class VTTGraphicsScene(QGraphicsScene):
             elif (self.isWallHandle(item)):
                 # Position has already been updated, just pass current position
                 # to update the wall points
-                self.setWallHandlePos(item, item.pos())
+                self.setWallHandleItemPos(item, item.pos())
 
             elif (self.isGridHandle(item)):
                 # Remove the grid
@@ -3885,11 +4651,27 @@ class VTTGraphicsScene(QGraphicsScene):
                 #     Probably not positions but token sizes? Have a global
                 #     scale on the scene dependent on the grid diameter? (but
                 #     that would change positions too). 
-                self.cellDiameter = item.pos().x()
-                self.map_scene.cell_diameter = self.cellDiameter
-                # Update the grid
+                # XXX Checking modifiers here is not a good idea?
+                if (int(qApp.keyboardModifiers() & Qt.ControlModifier) != 0):
+                    # This has already been snapped to make x and y sizes to
+                    # match, just use one of them to calculate the new diameter
+                    cellOffset = self.cellOffset
+                    cellDiameter = item.pos().x() - self.cellAnchor.x()
+                    cellDiameter = abs(cellDiameter)
+                    
+                else:
+                    cellDiameter = self.cellDiameter
+                    cellOffset = QPointF(item.pos().x() % cellDiameter, item.pos().y() % cellDiameter)
+
+                self.setCellOffsetAndDiameter(cellOffset, cellDiameter)
+                # XXX This is not clean, but needs to restore cellAnchor
+                #     otherwise it gets reset to the "canonical" position
+                self.cellAnchor = item.pos() - QPointF(cellDiameter, cellDiameter)
+                
+                # Dirty the scene (cell diameter or offset changed, so any item
+                # that depends on that should change) and the grid
                 self.makeDirty()
-                self.addGrid(self.cellDiameter)
+                self.addGrid()
                 
                 
         if (change in [
@@ -3936,8 +4718,15 @@ class VTTGraphicsScene(QGraphicsScene):
     def getSnapToGrid(self):
         return self.snapToGrid
         
-    def setCellDiameter(self, cellDiameter):
+    def setCellOffsetAndDiameter(self, cellOffset, cellDiameter):
+        self.cellOffset = cellOffset
         self.cellDiameter = cellDiameter
+        # XXX This assumes the grid image is set at 0,0, should get the image
+        #     rect to offset it (but it needs to exist at this time, which it may
+        #     not at initialization?)
+        self.cellAnchor = self.cellOffset
+        self.map_scene.cell_offset = qtuple(cellOffset)
+        self.map_scene.cell_diameter = cellDiameter
 
     def getCellDiameter(self):
         return self.cellDiameter
@@ -3960,6 +4749,16 @@ class VTTGraphicsScene(QGraphicsScene):
     def imageAt(self, index):
         return list(self.imageItems)[index]
 
+    def imageAtData(self, data):
+        for imageItem in self.imageItems:
+            if (imageItem.data(0) == data):
+                break
+
+        else:
+            imageItem = None
+
+        return imageItem
+
     def isWall(self, item):
         return (item in self.wallItems)
     
@@ -3977,7 +4776,7 @@ class VTTGraphicsScene(QGraphicsScene):
         return self.wallHandleItems
 
     def isGridHandle(self, item):
-        return (item == self.gridHandle)
+        return (item == self.gridHandleItem)
 
     def isDoor(self, item):
         return item in self.doorItems
@@ -4030,6 +4829,12 @@ class VTTGraphicsScene(QGraphicsScene):
         # addition, not calling setVisible also fixes an infinite loop because
         # itemChanged reacts to visiblechanged, but this could be fixed ignoring
         # those for wall handles)
+
+        # This is in the hot path of updatefog, don't do anything if already in
+        # the right state, this prevents the busy work below and thus faster
+        # updates when walls and wall handles are hidden
+        if (self.allWallsItem.isVisible() == visible):
+            return
         
         # setZValue generate itemChange on each, lock updates for those and
         # update at the end
@@ -4149,6 +4954,8 @@ class VTTGraphicsScene(QGraphicsScene):
         self.setTokenLabelText(pixItem, map_token.name)
         # Keep the label always at the same size disregarding the token size,
         # because the label is a child of the pixitem it gets affected by it.
+        # XXX This font size needs to be scaled by map size otherwise it looks
+        #     small on big maps? 
         # Also reduce the font a bit
         font = txtItem.font()
         font.setPointSize(txtItem.font().pointSize() *0.75)
@@ -4182,6 +4989,22 @@ class VTTGraphicsScene(QGraphicsScene):
     def getTokenLabelItem(self, token):
         return token.childItems()[0]
 
+    def addHandleItem(self, point, pen, data0 = None):
+        handleDiameter = self.cellDiameter * 0.1
+        # QGraphicsRectItem handles position and the rect topleft independently,
+        # use the topleft to offset the rect so the position matches the rect's
+        # center
+        handleItem = GraphicsRectNotifyItem(-handleDiameter*0.5, -handleDiameter*0.5, handleDiameter, handleDiameter)
+        handleItem.setPos(point)
+        handleItem.setFlags(QGraphicsItem.ItemIsFocusable | QGraphicsItem.ItemIsSelectable | QGraphicsItem.ItemIsMovable | QGraphicsItem.ItemSendsScenePositionChanges)
+        handleItem.setPen(pen)
+        handleItem.setZValue(0.3)
+        handleItem.setCursor(Qt.SizeAllCursor)
+        handleItem.setData(0, data0)
+        self.addItem(handleItem)
+        
+        return handleItem
+
     def addWall(self, map_wall):
         # XXX This is high frequency on caverns because of spurious setscene calls
         assert None is logger.debug("Adding wall %s", map_wall)
@@ -4210,20 +5033,9 @@ class VTTGraphicsScene(QGraphicsScene):
         self.wallItems.add(wallItem)
         self.allWallsItem.addToGroup(wallItem)
 
-        handleDiameter = self.cellDiameter * 0.1
         for i, point in enumerate(qpoints):
-            # QGraphicsRectItem handles position and the rect topleft
-            # independently, use the topleft to offset the rect so the position
-            # matches the rect's center
-            handleItem = GraphicsRectNotifyItem(-handleDiameter*0.5, -handleDiameter*0.5, handleDiameter, handleDiameter)
-            handleItem.setPos(point)
-            handleItem.setFlags(QGraphicsItem.ItemIsFocusable | QGraphicsItem.ItemIsSelectable | QGraphicsItem.ItemIsMovable | QGraphicsItem.ItemSendsScenePositionChanges)
-            handleItem.setPen(pen)
-            handleItem.setData(0, wallItem)
+            handleItem = self.addHandleItem(point, pen, wallItem)
             handleItem.setData(1, i)
-            handleItem.setZValue(0.3)
-            handleItem.setCursor(Qt.SizeAllCursor)
-            self.addItem(handleItem)
             self.wallHandleItems.add(handleItem)
 
     def removeWall(self, wallItem):
@@ -4236,14 +5048,34 @@ class VTTGraphicsScene(QGraphicsScene):
 
         # Remove from the set by safely iterating over a list copy 
         for handleItem in list(self.wallHandleItems):
-            if (self.getWallItemFromWallHandle(handleItem) == wallItem):
+            if (self.getWallItemFromWallHandleItem(handleItem) == wallItem):
                 self.wallHandleItems.remove(handleItem)
                 self.removeItem(handleItem)
 
-    def getWallItemFromWallHandle(self, handleItem):
+    def addCircularWall(self, scenePos, sides = 4):
+        # XXX Refactor this for light range, but light range is inside
+        #     compute_fog which doesn't know about gscene?
+        r = self.getCellDiameter() * 1.0
+        
+        points = []
+        for s in xrange(sides):
+            x, y = (
+                scenePos.x() + r*math.cos(2.0 * s * math.pi / sides), 
+                scenePos.y() + r*math.sin(2.0 * s * math.pi / sides)
+            )
+            points.append([x, y])
+        
+        wall = Struct(points=points, closed=True)
+
+        self.map_scene.map_walls.append(wall)
+        self.addWall(wall)
+
+        self.makeDirty()
+
+    def getWallItemFromWallHandleItem(self, handleItem):
         return handleItem.data(0)
 
-    def getPointIndexFromWallHandle(self, handleItem):
+    def getPointIndexFromWallHandleItem(self, handleItem):
         # Note storing lists into setData causes the list to be copied (verified
         # by checking the Python ID), so this needs to store the index into the
         # point list and then retrieve the point from the list so any updates
@@ -4278,44 +5110,35 @@ class VTTGraphicsScene(QGraphicsScene):
         self.imageItems.add(item)
         self.addItem(item)
 
-    def addGrid(self, cellDiameter):
+    def addGrid(self):
         rect = self.itemsBoundingRect()
+        
         pen = QPen(QColor(0, 0, 0, 128))
-        x, y = rect.left(), rect.top()
+        x, y = self.cellAnchor.x(), self.cellAnchor.y()
         while (x < rect.right()):
             lineItem = QGraphicsLineItem(x, rect.top(), x, rect.bottom())
             lineItem.setPen(pen)
             self.gridLineItems.add(lineItem)
             self.gridItem.addToGroup(lineItem)
-            x += cellDiameter
+            x += self.cellDiameter
 
         while (y < rect.bottom()):
             lineItem = QGraphicsLineItem(rect.left(), y, rect.right(), y)
             lineItem.setPen(pen)
             self.gridLineItems.add(lineItem)
             self.gridItem.addToGroup(lineItem)
-            y += cellDiameter
+            y += self.cellDiameter
 
         # XXX This should be in some global place
-        if (self.gridHandle is None):
+        # XXX The position needs to be always updated even if already created?
+        if (self.gridHandleItem is None):
             # Add handles to pan and size the grid
             # QGraphicsRectItem handles position and the rect topleft
             # independently, use the topleft to offset the rect so the position
             # matches the rect's center
-            # XXX This doesn't need to be added/removed on addGrid
-            # XXX This should be hidden on setGridVisible
-            # XXX Missing top left for panning/offsetting
-            # XXX Refactor for wallhandles and gridhandles
-            handleDiameter = cellDiameter * 0.1
-            handleItem = GraphicsRectNotifyItem(-handleDiameter*0.5, -handleDiameter*0.5, handleDiameter, handleDiameter)
-            handleItem.setPos(rect.left() + cellDiameter, rect.top() + cellDiameter)
-            handleItem.setFlags(QGraphicsItem.ItemIsFocusable | QGraphicsItem.ItemIsSelectable | QGraphicsItem.ItemIsMovable | QGraphicsItem.ItemSendsScenePositionChanges)
-            handleItem.setPen(pen)
-            handleItem.setData(0, self.gridItem)
-            handleItem.setZValue(0.3)
-            handleItem.setCursor(Qt.SizeAllCursor)
-            self.addItem(handleItem)
-            self.gridHandle = handleItem
+            # XXX This should be hidden on setGridVisible?
+            handleItem = self.addHandleItem(self.cellAnchor + QPointF(self.cellDiameter, self.cellDiameter), Qt.red,self.gridItem)
+            self.gridHandleItem = handleItem
 
     def removeGrid(self):
         logger.info("")
@@ -4646,6 +5469,190 @@ class VTTGraphicsView(QGraphicsView):
 
         gscene.installEventFilter(self)
         return super(VTTGraphicsView, self).setScene(gscene)
+
+    def detectAndGenerateWallAtPos(self, pos):
+        """
+        Steps:
+        1. Detect the maximum square that fits inside the wall (wall depth)
+        2. Use the wall depth to drive the downscale and erode filter sizes
+           below
+        3. Collect path positions via flood fill with downsize and erosion in
+           order to remove fine features
+        4. Thin the wall to the skeleton points
+        5. Build pixel-long polylines from the skeleton points
+        6. Merge multiple straight-ish pixel-long polylines into a single
+           straight line, with some tolerance
+
+        Downscaling serves two purposes:
+        - Performance, process less pixels, especially necessary for edge
+          thinning which is performed multiple times since only two pixels of
+          width are removed per iteration
+        - Quantize, remove too much detail, less different coordinates and
+          straighter lines (but the hough space has its own additional
+          quantization)
+
+        The erosion filter diameter is necessary to remove fine features so they
+        are not contoured (eg hatching, grids), but it also helps with
+        performance since it returns a thinner contour and thinning is a slow
+        iterative process (not clear where the perf breaking point between
+        erosion kernel size and number of thinning iterations is)
+
+        Ideally there would be no downscaling, the erosion filter would remove
+        all fine features, but performance suffers. Also downscaling performs
+        important quantization so contiguous points can be merged into a
+        straight line
+
+        References
+
+        - https://note.nkmk.me/en/python-numpy-image-processing/
+        - https://note.nkmk.me/en/python-numpy-opencv-image-binarization/
+        - https://msameeruddin.hashnode.dev/image-dilation-explained-in-depth-using-numpy
+        - https://msameeruddin.hashnode.dev/image-erosion-explained-in-depth-using-numpy
+        - https://tempflip.medium.com/lane-detection-with-numpy-2-hough-transform-f4c017f4da39
+        - https://alyssaq.github.io/2014/understanding-hough-transform/
+        - https://github.com/okaneco/skeletonize#reference
+        - https://dl.acm.org/doi/10.1145/357994.358023
+        - https://www.csie.ntu.edu.tw/~hil/paper/cacm86.pdf
+        - https://dl.acm.org/doi/10.1145/321637.321646
+        - https://iris.unimore.it/retrieve/e31e124e-f5e5-987f-e053-3705fe0a095a/2019_ICIAP_Improving_the_Performance_of_Thinning_Algorithms_with_Directed_Rooted_Acyclic_Graphs.pdf
+        - https://homepages.inf.ed.ac.uk/rbf/HIPR2/wksheets.htm
+        """
+        
+        # XXX Find out why hough space theta quantization doesn't seem to help
+        #     quantizing 
+
+        # XXX Do downscale after erosion for more quantization?
+        
+        # XXX Do something similar to help finding the ideal grid size on maps
+        #     with grids (even detect multiple grid cells and average), use a
+        #     horizontal/vertical or corner filter
+
+        # XXX Do some progress dialog box, see 
+        #     https://stackoverflow.com/questions/47879413/pyqt-qprogressdialog-displays-as-an-empty-white-window
+        
+        gscene = self.scene()
+
+        # XXX This hardcodes the image to autodetect to 0
+        imageItem = gscene.imageAt(0)
+        pixmap = imageItem.pixmap()
+        a = np_pixmaptoarray(pixmap)
+        a_bak = a
+
+        w, h = pixmap.width(), pixmap.height()
+
+        pixel = imageItem.mapFromScene(self.mapToScene(pos))
+        x, y = qtuple(pixel.toPoint())
+
+        # Find the wall size that will drive the downscale factor
+        # and the erosion kernel size
+        
+        # Full-image grayscale and thresholding can take long on big maps, this
+        # is done inside np_findmaxfiltersize at per erode-size level
+        k = np_findmaxfiltersize(a, x, y, 64)
+
+        # There's no hard logic to this other making 
+        #       downscale + filter_diameter <= k 
+        # and empirically testing values that look ok
+        downscale = int(math.log(k, 2)) - 1
+        filter_diameter = int(math.log(k, 2))
+        
+        while (True):
+            logger.info("found max_k %d downscale %d filter_diameter %d", k, downscale, filter_diameter)
+
+            QApplication.setOverrideCursor(Qt.WaitCursor)
+            # This is necessary so the mouse pointer change is made visible
+            qApp.processEvents()
+
+            pixmap2 = pixmap
+            if (downscale > 1):
+                logger.info("Downscaling %d", downscale)
+                pixmap2 = pixmap.scaledToWidth(pixmap.width() / downscale)
+                if (save_np_debug_images):
+                    logger.info("Saving downscale")
+                    pixmap2.save(os.path.join("_out", "downscaled.png"))
+
+            # Recalculate since the image may have been downscaled
+            pixel = imageItem.mapFromScene(self.mapToScene(pos)) / downscale
+            x, y = qtuple(pixel.toPoint())
+
+            a = np_pixmaptoarray(pixmap2)
+            
+            # XXX Ideally grayscale/hue and threshold value should be another
+            #     search parameter/extracted from pixel?
+            # XXX Grayscale and threshold could be done just in time?
+            a = np_graythreshold(a, 64)
+            active = np_floodfillerode(a, x, y, filter_diameter)
+            b = a_bak.copy()
+            if (len(active) > 0):
+                j, i = np.array(list(active)).T * downscale
+                for jj in xrange(downscale):
+                    for ii in xrange(downscale):
+                        # Note each write is a broadcast to all elements in the
+                        # set so it cannot be converted into a single index
+                        # range write (the other option is to use an index range
+                        # write inside a set element loop, but the number of
+                        # elements in the set is normally a lot larger than
+                        # downscale, so probably slower)
+                        b[j + jj, i + ii] = (128, 0, 255, 255)
+                
+            qimage = QImage(b.data, b.shape[1], b.shape[0], QImage.Format_RGB32)
+            pixmap3 = QPixmap.fromImage(qimage)
+            imageItem.setPixmap(pixmap3)
+
+            qApp.restoreOverrideCursor()
+
+            # XXX This should allow scrolling the VTTGraphicsView in that mode,
+            #     but then the dialog needs to be non-modal?
+            text, ok = QInputDialog.getText(
+                # XXX This needs to be the main window or the buttons will fail
+                #     to lose focus and won't work when clicked (could be due to
+                #     findParentDock returning the dock parent and changing the
+                #     style if using VTTGraphicsView instead of VTTMainWindow).
+                #     Special case findParentDock to ignore QInputDialog or
+                #     abstract it out instead of hard-coding to parent.parent?
+                self.parent().parent(),
+                "Autowall Parameters (%dx%d %d)" % (w, h, k),
+                "downscale, filter size:", QLineEdit.Normal, 
+                "%d, %d" % (downscale, filter_diameter)
+            )
+            if ((not ok) or (text == "")):
+                # XXX This replicates cleanup, set a flag and use a common path
+                imageItem.setPixmap(pixmap)
+                return
+            new_downscale, new_filter_diameter = [int(i) for i in text.split(",")]
+            
+            if ((new_downscale, new_filter_diameter) == (downscale, filter_diameter)):
+                break
+            downscale, filter_diameter = new_downscale, new_filter_diameter
+
+        imageItem.setPixmap(pixmap)
+
+        QApplication.setOverrideCursor(Qt.WaitCursor)
+        # This is necessary so the mouse pointer change is made visible
+        qApp.processEvents()
+        
+        active = np_findcontourpoints(a, active)
+        polylines, tjunctions = np_connectcontourpoints(a, active)
+        max_coalesce_dist2 = (gscene.map_scene.cell_diameter*downscale / 8.0) ** 2
+        walls = np_coalescepoints(a, polylines, tjunctions, max_coalesce_dist2)
+
+        # XXX Have options to grid snap the walls?
+        # XXX Have options to do extra downscale?
+
+        # This can be many walls, block scene updates
+        # XXX Not clear this is really blocking emits?
+        gscene.setLockDirtyCount(True)
+        for points in walls:
+            wall = Struct(points=[qtuple(imageItem.mapToScene(QPointF(*p)*downscale)) for p in points], closed=False)
+            gscene.map_scene.map_walls.append(wall)
+            gscene.addWall(wall)
+        gscene.setLockDirtyCount(False)
+        gscene.makeDirty()
+        gscene.invalidate()
+            
+        # XXX This needs a context guard to protect against leaving the wrong
+        #     cursor in the presence of exceptions
+        qApp.restoreOverrideCursor()
     
     def mousePressEvent(self, event):
         logger.info("%s", EventTypeString(event))
@@ -4660,7 +5667,12 @@ class VTTGraphicsView(QGraphicsView):
             # XXX In general use the selected item instead of the focused one?
             focusItem = gscene.selectedItems()[0]
         if (int(event.modifiers() & Qt.ControlModifier) != 0):
-            if (gscene.isWallHandle(focusItem)):
+            # XXX This should set the Qt.CrossCursor when ctrl is pressed and
+            #     mouse is moved?
+            if (gscene.isGridHandle(focusItem)):
+                pass
+
+            elif (gscene.isWallHandle(focusItem)):
                 # Add a point to the focused wall on ctrl + click
                 
                 # Add the point after the focused one unless the focused one is the
@@ -4671,8 +5683,8 @@ class VTTGraphicsView(QGraphicsView):
                 #     could add to the segment that is closest instead of always
                 #     adding between the focused and the next point
                 wallHandle = focusItem
-                wallItem = gscene.getWallItemFromWallHandle(wallHandle)
-                i = gscene.getPointIndexFromWallHandle(wallHandle)
+                wallItem = gscene.getWallItemFromWallHandleItem(wallHandle)
+                i = gscene.getPointIndexFromWallHandleItem(wallHandle)
                 map_wall = wallItem.data(0)
                 # On open walls always extend the extremes, otherwise extend the
                 # next point to the currently focused handle
@@ -4746,30 +5758,39 @@ class VTTGraphicsView(QGraphicsView):
                 focusItem = gscene.addToken(map_token)
                 gscene.setFocusItem(focusItem)
                 gscene.makeDirty()
+            
+            elif (gscene.isGridHandle(focusItem)):
+                self.queryGridParams()
 
         else:
-            # XXX This could do edge detection of the clicked position and try
-            #     to create the appropriate wall (or by flood filing in HSV
-            #     space, edge detection of scaled down map to rule out fine
-            #     features, etc)
-            r = gscene.getCellDiameter() * 1.0
-            sides = 4
-            scenePos = self.mapToScene(event.pos())
-            
-            points = []
-            for s in xrange(sides):
-                x, y = (
-                    scenePos.x() + r*math.cos(2.0 * s * math.pi / sides), 
-                    scenePos.y() + r*math.sin(2.0 * s * math.pi / sides)
-                )
-                points.append([x, y])
-            
-            wall = Struct(points=points, closed=True)
-            gscene.map_scene.map_walls.append(wall)
-            gscene.addWall(wall)
+            self.detectAndGenerateWallAtPos(event.pos())
 
-            gscene.makeDirty()
-                            
+    def queryGridParams(self):
+        # XXX This should autodetect the grid restricted to the first
+        #     cell, pasting the parameters to the dialog box
+        gscene = self.scene()
+        text, ok = QInputDialog.getText(
+            self,
+            "Grid Parameters", 
+            "Grid cell (offsetx, offsety, diameter):", QLineEdit.Normal, 
+            "%d, %d, %d" % (gscene.cellOffset.x(), gscene.cellOffset.y(), gscene.cellDiameter)
+        )
+        if ((not ok) or (text == "")):
+            return
+
+        cellOffsetX, cellOffsetY, cellDiameter = [float(i) for i in text.split(",")]
+        cellOffset = QPointF(cellOffsetX, cellOffsetY)
+        gscene.setCellOffsetAndDiameter(cellOffset, cellDiameter)
+        gscene.gridHandleItem.setPos(gscene.cellAnchor + QPointF(cellDiameter, cellDiameter))
+        
+        # Remove and add the grid back to refresh it
+        gscene.removeGrid()
+        # Dirty the scene (cell diameter or offset changed, so any item
+        # that depends on that should change) and the grid
+        gscene.makeDirty()
+        gscene.addGrid()
+
+
     def wheelEvent(self, event):
         logger.debug("wheelEvent 0x%x", event.modifiers())
         
@@ -4796,12 +5817,12 @@ class VTTGraphicsView(QGraphicsView):
         event.accept()
 
     def event(self, event):
-        logger.info("event 0x%x", event.type())
+        logger.info("type %s", EventTypeString(event.type()))
         # Tab key needs to be trapped at the event level since it doesn't get to
         # keyPressEvent
-        gscene = self.scene()
         if ((event.type() == QEvent.KeyPress) and (event.key() in [Qt.Key_Tab, Qt.Key_Backtab]) and 
             (int(event.modifiers() & Qt.ControlModifier) == 0)):
+            gscene = self.scene()
 
             focusItem = gscene.focusItem()
 
@@ -4861,10 +5882,10 @@ class VTTGraphicsView(QGraphicsView):
             d = { Qt.Key_Left : (-1, 0), Qt.Key_Right : (1, 0), Qt.Key_Up : (0, -1), Qt.Key_Down : (0, 1)}
             # Snap to half cell and move in half cell increments
             # XXX Make this configurable
-            # XXX This assumes snapping starts at 0,0
             # XXX Keep track of the "heading" (even if there's a collision),
             #     could even be shown on the token and will with which door to
             #     open/close when there are multiple adjacent doors
+            # XXX Tokens don't move if snap is disabled, investigate?
             if (self.snapToGrid):
                 snap_granularity = gscene.getCellDiameter() / 2.0
 
@@ -4877,20 +5898,30 @@ class VTTGraphicsView(QGraphicsView):
                 
             delta = QPointF(*d[event.key()]) * move_granularity
 
-            # Snap in case it wasn't snapped before, this will also allow
-            # using the arrow keys to snap to the current cell if the
-            # movement is rejected below
-            snapPos = gscene.snapPositionWithCurrentSettings(focusItem.pos())
+            # Snap in case it wasn't snapped before, this will also allow using
+            # the arrow keys to snap to the current cell if the movement is
+            # rejected below
+            if (gscene.isGridHandle(focusItem)):
+                snapPos = focusItem.pos()
+
+            else:
+                snapPos = gscene.snapPositionWithCurrentSettings(focusItem.pos())
             
             # Note when the token is a group, the children are the one grabbed,
             # not the group, use the focusitem which is always the group
 
             if (gscene.isWallHandle(focusItem)):
                 # Update the handle and the adjacent walls
-                gscene.setWallHandlePos(focusItem, snapPos + delta)
+                gscene.setWallHandleItemPos(focusItem, snapPos + delta)
 
             elif (gscene.isGridHandle(focusItem)):
                 # Update the grid handle, will cascade into an update of the grid
+                
+                # XXX This doesn't work for ctrl+left/right keys which are
+                #     swallowed by the music player, fix? (but the x delta
+                #     cannot be easily applied anyway for both mouse and
+                #     keyboard homogeneously anyway?)
+                logger.info("setting pos %s", snapPos + delta)
                 focusItem.setPos(snapPos + delta)
 
             else:
@@ -4986,6 +6017,9 @@ class VTTGraphicsView(QGraphicsView):
             txtItem = gscene.getTokenLabelItem(focusItem)
             txtItem.setTextInteractionFlags(Qt.TextEditorInteraction)
             txtItem.setFocus(Qt.TabFocusReason)
+    
+        elif (gscene.isGridHandle(focusItem) and (event.key() == Qt.Key_Return)):
+            self.queryGridParams()
 
         elif (gscene.isToken(focusItem) and (event.text() in ["-", "+"])):
             # Increase/decrease token size, no need to recenter the token on the
@@ -5062,6 +6096,8 @@ class VTTGraphicsView(QGraphicsView):
                 
             elif (event.text() == "w"):
                 # Toggle wall visibility on DM View
+                # XXX Cycle through wall+handles visible, wall visible, both
+                #     invisible
                 self.drawWalls = not self.drawWalls
                 # Always draw doors otherwise can't interact with them
                 # XXX Have another option? Paint them transparent?
@@ -5303,6 +6339,7 @@ class VTTMainWindow(QMainWindow):
     def createActions(self):
         self.newAct = QAction("&New", self, shortcut="ctrl+n", triggered=self.newScene)
         self.openAct = QAction("&Open...", self, shortcut="ctrl+o", triggered=self.openScene)
+        self.openDysonUrlAct = QAction("Open D&yson URL...", self, shortcut="ctrl+shift+o", triggered=self.openDysonUrl)
         self.saveAct = QAction("&Save", self, shortcut="ctrl+s", triggered=self.saveScene)
         self.saveAsAct = QAction("Save &As...", self, shortcut="ctrl+shift+s", triggered=self.saveSceneAs)
         self.exitAct = QAction("E&xit", self, shortcut="alt+f4", triggered=self.close)
@@ -5316,6 +6353,7 @@ class VTTMainWindow(QMainWindow):
         
         self.cutItemAct = QAction("Cut& Item", self, shortcut="ctrl+x", triggered=self.cutItem)
         self.copyItemAct = QAction("&Copy Item", self, shortcut="ctrl+c", triggered=self.copyItem)
+        # XXX Do ctrl+shift+v to paste text without format
         self.pasteItemAct = QAction("&Paste Item", self, shortcut="ctrl+v", triggered=self.pasteItem)
         self.deleteItemAct = QAction("&Delete Item", self, shortcut="del", triggered=self.deleteItem)
         self.deleteSingleItemAct = QAction("&Delete Single Item", self, shortcut="ctrl+del", triggered=self.deleteItem)
@@ -5356,6 +6394,7 @@ class VTTMainWindow(QMainWindow):
         fileMenu.addAction(self.newAct)
         fileMenu.addSeparator()
         fileMenu.addAction(self.openAct)
+        fileMenu.addAction(self.openDysonUrlAct)
         fileMenu.addSeparator()
         fileMenu.addAction(self.saveAct)
         fileMenu.addAction(self.saveAsAct)
@@ -5658,6 +6697,7 @@ class VTTMainWindow(QMainWindow):
         scene.map_doors = []
         scene.map_walls = []
         scene.cell_diameter = 70
+        scene.cell_offset = [0, 0]
         scene.map_tokens = []
         scene.map_images = []
         scene.music = []
@@ -5689,7 +6729,7 @@ class VTTMainWindow(QMainWindow):
         # filename
         l = os.listdir(os.path.dirname(ds_filepath))
         map_filepath = None
-        prefix = os.path.splitext(os.path.basename(ds_filepath))[0]
+        prefix = os_path_name(ds_filepath)
         for filename in l:
             if (filename.startswith(prefix) and filename.endswith(".png")):
                 this_filepath = os.path.join(os.path.dirname(ds_filepath), filename)
@@ -5754,7 +6794,7 @@ class VTTMainWindow(QMainWindow):
             # XXX Fix all float casting this malarkey, cast it in whatever
             #     operation needs it, not in the input data
             "scale": float(self.scene.cell_diameter), 
-            "name": os.path.splitext(os.path.basename(filepath))[0], 
+            "name": os_path_name(filepath),
             # XXX Fix all the path mess for embedded assets
             "filepath": os.path.relpath(filepath),
             "hidden" : False,
@@ -5764,16 +6804,21 @@ class VTTMainWindow(QMainWindow):
         # XXX Use something less heavy handed than setScene
         self.setScene(self.scene, self.campaign_filepath)
 
-    def importImage(self):
-        dirpath = os.path.curdir if self.campaign_filepath is None else os.path.dirname(self.campaign_filepath)
-        # XXX Get supported extensions from Qt
-        filepath, _ = QFileDialog.getOpenFileName(self, "Import Image", dirpath, "Images (*.png *.jpg *.jpeg *.jfif *.webp)")
-
-        if (filepath == ""):
-            filepath = None
-
+    def importImage(self, checked=False, filepath = None):
+        # XXX This is called explicitly and as a shortcut handler/action, the
+        #     second passes checked as second parameter so any extra optional
+        #     parameters need to be passed as third parameter or later, split in
+        #     two?
         if (filepath is None):
-            return
+            dirpath = os.path.curdir if self.campaign_filepath is None else os.path.dirname(self.campaign_filepath)
+            # XXX Get supported extensions from Qt
+            filepath, _ = QFileDialog.getOpenFileName(self, "Import Image", dirpath, "Images (*.png *.jpg *.jpeg *.jfif *.webp)")
+
+            if (filepath == ""):
+                filepath = None
+
+            if (filepath is None):
+                return
 
         # Try to guess the number of cells \xD7 is "multiplicative x"
         m = re.match(r".*\D+(\d+)\W*[x|\xD7]\W*(\d+)\D+", filepath)
@@ -5884,7 +6929,7 @@ class VTTMainWindow(QMainWindow):
         s = Struct(**{
             # XXX Fix all the path mess for embedded assets
             "filepath" :  os.path.relpath(filepath), 
-            "name" : os.path.splitext(os.path.basename(filepath))[0],
+            "name" : os_path_name(filepath),
         })
         self.scene.music.append(s)
 
@@ -6013,11 +7058,14 @@ class VTTMainWindow(QMainWindow):
                 logger.info("Deleting graphicsitem %s", item.data(0))
                 if (gscene.isToken(item)):
                     self.scene.map_tokens.remove(item.data(0))
+
+                elif (gscene.isGridHandle(item)):
+                    pass
                 
                 elif (gscene.isWallHandle(item)):
                     wallHandle = item
-                    wallItem = gscene.getWallItemFromWallHandle(wallHandle)
-                    i = gscene.getPointIndexFromWallHandle(wallHandle)
+                    wallItem = gscene.getWallItemFromWallHandleItem(wallHandle)
+                    i = gscene.getPointIndexFromWallHandleItem(wallHandle)
                     map_wall = wallItem.data(0)
                     
                     # If ctrl is pressed remove just this point and join
@@ -6612,6 +7660,7 @@ class VTTMainWindow(QMainWindow):
             scene.map_walls = [Struct(**map_wall) for map_wall in js["map_walls"]]
 
         scene.cell_diameter = js["cell_diameter"]
+        scene.cell_offset = js.get("cell_offset", [0, 0])
         scene.map_tokens = [Struct(**map_token) for map_token in js["map_tokens"]]
         # XXX This should convert any dicts to struct
         for map_token in scene.map_tokens:
@@ -6644,7 +7693,183 @@ class VTTMainWindow(QMainWindow):
 
         self.showMessage("Loaded %r" % filepath)
 
+    def loadDysonUrl(self, url):
+        """
+        eg https://dysonlogos.blog/2021/01/08/dungeons-of-the-grand-illusionist/
+        """
+        import urllib2
+        import contextlib
+        
+        with contextlib.closing(urllib2.urlopen(url)) as f:
+            data = f.read()
 
+        nest_count = 0
+        entry_nest_count = None
+        entry_start = None
+        entry = None
+        flair_start = None
+        flair_nest_count = None
+        flair_end = None
+        image_nest_count = None
+        images = []
+        image_urls = []
+        # XXX Use QXml, QDomDocument, or QXmlQuery instead of manual parsing?
+        #     See http://3gfp.com/wp/2014/07/three-ways-to-parse-xml-in-qt/
+        #     See http://3gfp.com/2015/01/qt-xml-parsing-continued/
+        for m in re.finditer(r'<(?P<opentag>\w+)(?P<attribs>[^>]*)>|</(?P<closetag>\w+)>', data):
+            opentag = m.group('opentag')
+            if (opentag is not None):
+                # Don't try to track every tag, some tags open and close in a
+                # single angle or some tags don't close, which would disbalance
+                # nest_count
+                if (opentag in ["div", "h1"]):
+                    nest_count += 1
+                    if (opentag == "div"):
+                        s = m.group('attribs')
+                        if (s is not None):
+                            # XXX Do better attrib value parsing, but keep in
+                            #     mind needs proper quote grouping
+
+                            # post-entry div contains the full article
+                            if ("post-entry" in s):
+                                entry_nest_count = nest_count
+                                entry_start = m.start()
+
+                            # jp-post-flair is a div inside post-entry div that
+                            # has the social network links, etc, remove
+                            elif ("jp-post-flair" in s):
+                                flair_nest_count = nest_count
+                                flair_start = m.start()
+                            
+                            # wp-block-image is the div that contains the link
+                            # with the figure and img tags
+
+                            # XXX Make this more flexible so it works with any
+                            #     image tag/link inside post-entry? Eg see
+                            #     https://dysonlogos.blog/2017/08/15/infested-hall-with-video/
+                            elif ("wp-block-image" in s):
+                                image_nest_count = nest_count
+                                images.append([m.start(), None])
+                    
+                    elif (opentag == "h1"):
+                        h1_start = m.start()
+
+            else:
+                closetag = m.group('closetag')
+                if (closetag in ["div", "h1"]):
+                    if (closetag == "div"):
+                        if (nest_count == entry_nest_count):
+                            # XXX All this assumes utf-8
+                            encoding = 'utf-8'
+                            entry = data[h1_start:h1_end].decode(encoding) + ('\n<a href="%s">%s</a>\n' % (url, url))
+                            image_end = entry_start
+                            
+                            for image in images:
+                                image_start = image[0]
+                                entry += data[image_end:image_start].decode(encoding)
+                                image_end = image[1]
+                                img = data[image[0]:image[1]]
+                                # XXX This could offer to choose the quality of
+                                #     the embedded images (data-medium-file,
+                                #     data-large-file)
+                                mm = re.search(r'data-medium-file="([^"]*)"', img)
+                                if (mm is not None):
+                                    # Some random images don't have
+                                    # data-medium-file, ignore
+                                    image_url = mm.group(1)
+                                    with contextlib.closing(urllib2.urlopen(image_url)) as f:
+                                        image_data = f.read()
+
+                                        data_url = bytes_to_data_url(image_data)
+                                        entry += '<div align="center"><img src="%s"/></div>' % data_url
+
+                                    # Add to list to let user choose later which
+                                    # one to use as map
+                                    mm = re.search(r'<a href="([^"]+)"', img)
+                                    # Some images don't an have a link to the
+                                    # high res version, skip
+                                    if (mm is not None):
+                                        image_url = mm.group(1)
+                                        image_urls.append(image_url)
+
+                                else:
+                                    logger.warning("data-medium-file not found in %r", img)
+                            
+                            entry += data[image_end:flair_start].decode(encoding) + data[flair_end:m.end()].decode(encoding)
+                            break
+                        
+                        elif (flair_nest_count == nest_count):
+                            flair_end = m.end()
+                            flair_nest_count = None
+
+                        elif (image_nest_count == nest_count):
+                            images[-1][1] = m.end()
+                            image_nest_count = None
+                    
+                    elif (closetag == "h1"):
+                        h1_end = m.end()
+                
+                    nest_count -= 1
+
+        scene = Struct()
+        
+        # XXX Create from an empty json so there's a single scene init path?
+        #     Also, the "empty" json could have stock stuff like tokens, etc
+        scene.map_doors = []
+        scene.map_walls = []
+        scene.cell_diameter = 70
+        scene.cell_offset = [0, 0]
+        scene.map_tokens = []
+        scene.map_images = []
+        scene.music = []
+        scene.handouts = []
+        scene.texts = []
+
+        self.setScene(scene)
+
+        self.docEditor.textEdit.setHtml(entry)
+        # Scroll to the end which normally has the dpi information so it can be
+        # seen by the user when prompted for number of cells in the map
+        self.docEditor.textEdit.moveCursor(QTextCursor.End)
+        # Force to ask for name when saving
+        self.docEditor.setFilepath(None)
+        self.docEditor.setModified(True)
+        # Update the modified indicator
+        self.updateTextTitle(self.docEditor.textEdit, True)
+        
+        # Request user to choose an image of the ones in the page, default by
+        # heuristics to second to last which is normally the highest quality
+        # nogrid map
+        if (len(image_urls) > 0):
+            text, ok = QInputDialog.getItem(
+                self,
+                "Choose map image", 
+                "Map Image URL", image_urls, len(image_urls) - 2, False
+            )
+            if ((not ok) or (text == "")):
+                pass
+
+            else:
+                image_url = text
+                filename = os.path.basename(image_url)
+                filepath = os.path.join("_out", "maps", filename)
+                with contextlib.closing(urllib2.urlopen(image_url)) as f_in, open(filepath, "wb") as f_out:
+                    buffer = f_in.read()
+                    f_out.write(buffer)
+                self.importImage(None, filepath)
+
+    def openDysonUrl(self):
+        text, ok = QInputDialog.getText(
+            self,
+            "Open Dyson Map", 
+            "URL:", QLineEdit.Normal, 
+            "https://dysonlogos.blog/2021/01/08/dungeons-of-the-grand-illusionist/"
+        )
+        if ((not ok) or (text == "")):
+            return
+
+        self.loadDysonUrl(text)
+            
     def openScene(self):
 
         dirpath = os.path.curdir if self.campaign_filepath is None else self.campaign_filepath
@@ -6698,7 +7923,7 @@ class VTTMainWindow(QMainWindow):
         tree.addTopLevelItem(scene_item)
         scene_item.setExpanded(True)
 
-        scene_item.addChild(QTreeWidgetItem(["%d" % self.scene.cell_diameter]))
+        scene_item.addChild(QTreeWidgetItem(["d: %d o: %s" % (self.scene.cell_diameter, self.scene.cell_offset)]))
 
         music = getattr(self.scene, "music", [])
         folder_item = QTreeWidgetItem(["Music (%d)" % len(music)])
@@ -6740,7 +7965,7 @@ class VTTMainWindow(QMainWindow):
             
             folder_item.addChild(subfolder_item)
         
-        folder_item = QTreeWidgetItem(["Walls (%d)" % len(self.scene.map_walls)])
+        folder_item = QTreeWidgetItem(["Walls (%d)" % sum([len(wall.points) - 1 for wall in self.scene.map_walls])])
         scene_item.addChild(folder_item)
         for wall in self.scene.map_walls: 
             child = QTreeWidgetItem(["%s" % (wall.points,)])
@@ -6760,7 +7985,11 @@ class VTTMainWindow(QMainWindow):
         scene_item.addChild(folder_item)
         folder_item.setExpanded(True)
         for image in self.scene.map_images:
-            subfolder_item = QTreeWidgetItem(["%s" % os.path.basename(image.filepath)])
+            imageItem = self.gscene.imageAtData(image)
+            subfolder_item = QTreeWidgetItem(["%s (%dx%d)" % (
+                os.path.basename(image.filepath), 
+                imageItem.pixmap().width(), imageItem.pixmap().height()
+            )])
             subfolder_item.setData(0, Qt.UserRole, image)
 
             item = QTreeWidgetItem(["%s" % (image.scene_pos,)])
@@ -6955,7 +8184,7 @@ class VTTMainWindow(QMainWindow):
                     buff = QBuffer(ba)
                     buff.open(QIODevice.WriteOnly) 
                     
-                    _, ext = os.path.splitext(filepath)
+                    ext = os_path_ext(filepath)
                     fmt = ext[1:].upper()
                     # XXX This is recompressing, should keep the existing file 
                     # XXX This assumes that all the assets with the same filepath
@@ -7068,12 +8297,14 @@ class VTTMainWindow(QMainWindow):
             gscene.addDoor(map_door)
 
     def populateGrid(self, gscene, scene):
-        gscene.addGrid(scene.cell_diameter)
+        gscene.addGrid()
 
     def populateGraphicsScene(self, gscene, scene):
 
-        gscene.setCellDiameter(scene.cell_diameter)
-
+        # XXX This seems out of place but may need to be set before populating
+        #     anything else, investigate moving to populateGrid?
+        gscene.setCellOffsetAndDiameter(QPointF(*scene.cell_offset), scene.cell_diameter)
+        
         # Populated in z-order
         # XXX Fix, no longer the case since many groups are created beforehand
         self.populateImages(gscene, scene)
@@ -7512,7 +8743,12 @@ class VTTMainWindow(QMainWindow):
         gscene.setLockDirtyCount(False)
 
     def updateTextTitle(self, editor, modified):
-        # Remove or append the modified indicator on the title
+        """
+        Remove or append the modified indicator on the title
+
+        Note this works for the main editor but also for any editor in a dock
+        window
+        """
         dock = self.findParentDock(editor)
         if (dock is None):
             dock = self
@@ -7525,6 +8761,7 @@ class VTTMainWindow(QMainWindow):
             title = title + "*"
             dock.setWindowTitle(title)
 
+        # XXX Should this be set unconditionally to modified?
         if (not modified):
             self.docEditor.setModified(False)
 
@@ -7550,10 +8787,13 @@ class VTTMainWindow(QMainWindow):
             return
 
         # If there's no filepath for this text and it has been modified, ask for
-        # one
+        # one, default to the campaign filename
         filepath = self.docEditor.getFilepath()
         if (filepath is None):
-            filepath = os.path.join("_out", "documents", "campaign.html")
+            filename = "campaign.html"
+            if (self.campaign_filepath is not None):
+                filename = os_path_name(self.campaign_filepath) + ".html"
+            filepath = os.path.join("_out", "documents", filename)
             filepath, _ = QFileDialog.getSaveFileName(self, "Save Text", filepath, "Text (*.html)")
 
             if (filepath is not None):
@@ -7702,7 +8942,7 @@ class VTTMainWindow(QMainWindow):
             #     fold state
             self.updateTree()
             self.updateCombatTrackers()
-            # XXX Hook here the scene undo stack? (probably too noise unless
+            # XXX Hook here the scene undo stack? (probably too noisy unless
             #     filtered by time or by diffing the scene?)
 
             fogCenter = gscene.getFogCenter()

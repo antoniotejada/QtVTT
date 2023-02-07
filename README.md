@@ -65,6 +65,14 @@ https://user-images.githubusercontent.com/6446344/209599973-5bc5334e-0cb4-4e40-a
 
 https://user-images.githubusercontent.com/6446344/213870729-844c23c7-9998-4427-979b-842faaaab076.mp4
 
+### Automatic wall creation
+
+https://user-images.githubusercontent.com/6446344/215364970-b693fa03-37bf-4a86-a693-935307eb1290.mp4
+
+### Open Dyson Logos page and automatic wall creation
+
+https://user-images.githubusercontent.com/6446344/217021348-e1ba535a-af18-4c77-b87b-6f586a6f1805.mp4
+
 
 ## Features
 
@@ -84,8 +92,7 @@ https://user-images.githubusercontent.com/6446344/213870729-844c23c7-9998-4427-9
 - Per scene music playlist
 - HTML Browser
 - Scene tree window
-- Creating, loading and saving scenes (editing walls and doors not yet
-  supported)
+- Creating, loading and saving scenes
 - Importing images, tokens, music, handouts, texts
 - Deleting tokens, images, walls, doors, music, handouts, texts
 - Cut, copy, and paste selected tokens
@@ -108,7 +115,9 @@ https://user-images.githubusercontent.com/6446344/213870729-844c23c7-9998-4427-9
 - Text editor for adventure script, with realtime table of contents, search,
   (some) markdown tag and keyboard shortcut formatting support, tables, and
   images.
-- Grid cell size resizing
+- Grid cell size resizing, panning
+- Automatic wall creation via contour detection
+- Open Dyson Logos page as campaign (eg https://dysonlogos.blog/2022/01/08/heart-of-darkling-frog-tower/ )
 
 ### HTTP server
 - Visualize player's view with line of sight
@@ -122,6 +131,7 @@ https://user-images.githubusercontent.com/6446344/213870729-844c23c7-9998-4427-9
 ## Requirements
 - Python 2.7
 - PyQt5
+- numpy (wall detection disabled otherwise)
 
 ## Installation
 - Won't work as is yet, will fail to run due to missing (copyrighted) AD&D 2E
@@ -155,7 +165,6 @@ https://user-images.githubusercontent.com/6446344/213870729-844c23c7-9998-4427-9
 - Image/token browser
 - Shared pointers and ephemeral drawing 
 - Wall, door, token, image, drawing, fog zone, creation/deletion
-- Wall edit help via CV edge detection
 - Permanent drawing (spell areas, fire splash, game-clock timer areas, grids,
   etc)
 - Measurement tools (cone, circle, line, square)
