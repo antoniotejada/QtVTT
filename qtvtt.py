@@ -186,6 +186,13 @@ def print_gc_stats(collect = True):
         logger.info("garbage %r", gc.garbage)
         logger.info("gc counts %s", gc.get_count())
 
+def list_getat(l, i, default = None):
+    """
+    Get list item at position i, or return default if list is empty, in a
+    similar manner to dict.get()
+    """
+    return default if (len(l) == 0) else l[i]
+
 def os_copy(src_filepath, dst_filepath):
     logger.info("Copying from %r to %r", src_filepath, dst_filepath)
     with open(src_filepath, "rb") as f_src, open(dst_filepath, "wb") as f_dst:
@@ -2915,9 +2922,6 @@ class VTTTextEditor(QTextEdit):
                         cursor.insertBlock(blockFmt)
                     
                 # Put the cursor back to where it was
-                # XXX This doesn't work when the cursor is at the end of the
-                #     line (cursor ends in the ruler block) but it works when
-                #     the cursor is elsewhere?
                 self.setTextCursor(prevCursor)
                 
             else:
@@ -2991,7 +2995,7 @@ class VTTTextEditor(QTextEdit):
         """
         # The token must start at begin of block/paragraph, find the start of
         # the block where the chars are being added. Note QTextEdit uses
-        # u"\u2029" or QChar.ParagraphSeparator instead of \n
+        # u"\u2029" aka QChar.ParagraphSeparator instead of \n
         doc = self.document()
         block = doc.findBlock(position)
 
@@ -3039,14 +3043,19 @@ class VTTTextEditor(QTextEdit):
                 formatChar = "l" * (i + 2)
             
             if (formatChar is not None):
-                # Remove token plus space
+                # Remove token plus space, note the space (tokenEnd+1) is
+                # deleted after formatting, otherwise the title block becomes
+                # empty and the cursor ends up in the ruler block instead of on
+                # the title block
                 cursor = self.textCursor()
                 cursor.setPosition(tokenStart)
-                cursor.setPosition(tokenEnd + 1, QTextCursor.KeepAnchor)
+                cursor.setPosition(tokenEnd, QTextCursor.KeepAnchor)
                 cursor.removeSelectedText()
                 # Move the cursor to the format toggling point
                 self.setTextCursor(cursor)
                 self.toggleFormat(formatChar)
+                # Now that the format has been set, remove space
+                cursor.deleteChar()
 
             # XXX Have a console mode to enter commands, die rolls, macros, etc?
             # XXX Allow html?
@@ -4721,10 +4730,18 @@ class VTTGraphicsScene(QGraphicsScene):
     def setCellOffsetAndDiameter(self, cellOffset, cellDiameter):
         self.cellOffset = cellOffset
         self.cellDiameter = cellDiameter
-        # XXX This assumes the grid image is set at 0,0, should get the image
-        #     rect to offset it (but it needs to exist at this time, which it may
-        #     not at initialization?)
-        self.cellAnchor = self.cellOffset
+
+        # Go through the images, set the anchor to the most topleft of all
+        # images plus offset so the grid starts strictly where the images start
+
+        minTopLeft = QPointF(0,0)
+        if (len(self.imageItems) > 0):
+            minTopLeft = QPointF(
+                min([imageItem.scenePos().x() for imageItem in self.imageItems]),
+                min([imageItem.scenePos().y() for imageItem in self.imageItems])
+            )
+
+        self.cellAnchor = minTopLeft + self.cellOffset
         self.map_scene.cell_offset = qtuple(cellOffset)
         self.map_scene.cell_diameter = cellDiameter
 
@@ -5785,8 +5802,9 @@ class VTTGraphicsView(QGraphicsView):
         
         # Remove and add the grid back to refresh it
         gscene.removeGrid()
-        # Dirty the scene (cell diameter or offset changed, so any item
-        # that depends on that should change) and the grid
+        # Dirty the scene (cell diameter or offset changed, so any item that
+        # depends on that should change) and the grid (eg the scene tree widget,
+        # etc)
         gscene.makeDirty()
         gscene.addGrid()
 
@@ -8297,18 +8315,18 @@ class VTTMainWindow(QMainWindow):
             gscene.addDoor(map_door)
 
     def populateGrid(self, gscene, scene):
+        gscene.setCellOffsetAndDiameter(QPointF(*scene.cell_offset), scene.cell_diameter)
         gscene.addGrid()
 
     def populateGraphicsScene(self, gscene, scene):
-
-        # XXX This seems out of place but may need to be set before populating
-        #     anything else, investigate moving to populateGrid?
-        gscene.setCellOffsetAndDiameter(QPointF(*scene.cell_offset), scene.cell_diameter)
-        
         # Populated in z-order
         # XXX Fix, no longer the case since many groups are created beforehand
+        
         self.populateImages(gscene, scene)
         
+        # Now that the images have been populated, populate the grid since the
+        # grid needs to access the images to know the origin and extents of the
+        # grid
         self.populateGrid(gscene, scene)
 
         self.populateWalls(gscene, scene)
@@ -8317,11 +8335,12 @@ class VTTMainWindow(QMainWindow):
 
         self.populateTokens(gscene, scene)
 
-        # Set the rect, needs to be done before adding the fog since they add
-        # very large polygons which would explode the bounding rect
-        # unnecessarily
+        # Set the rect, do it before adding any extraneous items that may bloat
+        # the bounding rect (not clear there are any of those nowadays, used to
+        # be the case with fog polygons, but those are now clipped to the rect)
+        # XXX Do this before populateTokens since tokens may be placed away from
+        #     the map?
         rect = gscene.itemsBoundingRect()
-        
         gscene.setSceneRect(rect)
         
     def generateSVG(self):
