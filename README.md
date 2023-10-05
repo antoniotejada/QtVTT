@@ -1,3 +1,6 @@
+### Playerviewport synchronized to the player and remote views
+
+![image](https://github.com/antoniotejada/QtVTT/assets/6446344/23c6fad7-4ae9-4b02-871c-ff77d70cf87e)
 # QtVTT
 
 Qt Virtual Table Top 
@@ -41,6 +44,11 @@ Virtual Table Top written in Python and Qt
 ### Text Editor with outline, search, blockquote, text formats, headings, lists, image, table
 
 ![image](https://user-images.githubusercontent.com/6446344/212931148-85ed2f4b-0dfc-460f-8dfb-6a0f5a398e05.png)
+
+### Playerviewport synchronized to the player view, remote view in edge app mode
+
+![image](https://github.com/antoniotejada/QtVTT/assets/6446344/715eb845-a2b9-4c71-b1fb-4c0d979ba534)
+
 
 ## Videos
 
@@ -96,6 +104,8 @@ https://user-images.githubusercontent.com/6446344/217021348-e1ba535a-af18-4c77-b
 - Importing images, tokens, music, handouts, texts
 - Deleting tokens, images, walls, doors, music, handouts, texts
 - Cut, copy, and paste selected tokens
+- Select point on single click, full wall on double click (so it can be deleted,
+  moved, etc wholesale)
 - Editing token labels
 - DM fulll and view screenshots
 - HTML documentation browser with quick filter, table of contents and search
@@ -111,13 +121,15 @@ https://user-images.githubusercontent.com/6446344/217021348-e1ba535a-af18-4c77-b
 - Token tooltips with hit points, AC, THAC0, etc
 - Token center label with initiative order
 - Shared and private handouts
-- Create and edit walls, add points after a given point, remove a point, split wall in two, remove empty walls
+- Create and edit walls, add points after a given point, remove a point, split
+  wall in two, remove empty walls
 - Text editor for adventure script, with realtime table of contents, search,
   (some) markdown tag and keyboard shortcut formatting support, tables, and
   images.
 - Grid cell size resizing, panning
 - Automatic wall creation via contour detection
 - Open Dyson Logos page as campaign (eg https://dysonlogos.blog/2022/01/08/heart-of-darkling-frog-tower/ )
+- Show player viewport on DM view, synchronize to player's and remote views
 
 ### HTTP server
 - Visualize player's view with line of sight
@@ -150,14 +162,20 @@ https://user-images.githubusercontent.com/6446344/217021348-e1ba535a-af18-4c77-b
 - Import .mod/.pak (Fantasy grounds)
 - Invisible walls: the wall hides the tokens behind but without "fog" (eg to
   make hiding in trees/bushes less obvious)
-- Support animated tokens/images (maps) in mp4, webm, gif, etc. Will need the
-  http client to receive the map and tokens/viz separately (also, record animated
-  videos from DungeonDraft or Fantasy Grounds Unity using eg XBOX game bar)
+- Window walls: the wall allows line of sight through but collides like a solid
+  wall
+- Support animated tokens/images (maps) in mp4, webm, gif, etc (eg see
+  https://dynamicdungeons.com/). Will need the http client to receive the map
+  and tokens/viz separately (also, record animated videos from DungeonDraft or
+  Fantasy Grounds Unity using eg XBOX game bar)
 - Use backfacing lines to project the fog, should give a more natural fog for trees, terrain, etc?
 - Export to Dungeon Scrawl for re-rendering (even re-render under the hood?) 
 - Music objects, area, fading in / out, shuffle, ordered (see https://tabletopaudio.com/, https://www.youtube.com/@bardify)
 - Hide/Show objects (secret doors, one way walls, secret areas, fogged areas,
   etc)
+- Label objects for text on maps (can work around by using tokens of numbers for
+  just numbers or the label of transparent tokens? Would need DM-only tag or
+  hide it but without too much fading?)
 - Layers, groups, stack objects up/down
 - Light sources and illumination/flickering/animated lights
 - Edit doors
@@ -165,14 +183,18 @@ https://user-images.githubusercontent.com/6446344/217021348-e1ba535a-af18-4c77-b
 - Image/token browser
 - Shared pointers and ephemeral drawing 
 - Wall, door, token, image, drawing, fog zone, creation/deletion
-- Permanent drawing (spell areas, fire splash, game-clock timer areas, grids,
-  etc)
+- Permanent drawing (spell areas, fire splash, game-clock timer areas, grids, 
+  areas of fog of war, etc)
 - Measurement tools (cone, circle, line, square)
 - Token states/stats/heading (stunned, game-clock timers, etc)
 - Campaign/scenes management
+- Encounter management: Store multiple encounters in scenes, edit via encounter
+  builder, add encounter to combat tracker, add/drag/copy&paste other tokens to
+  combat tracker
 - Copy paste of any object
 - Cross links/embedded tools in text editor (scenes, random tables, monsters,
   etc)
+    - See https://jsigvard.com/dnd/tables.php for random tables
 - Markdown text import/edit
 - Undo/redo
 - Record playing/combat history
@@ -185,11 +207,12 @@ https://user-images.githubusercontent.com/6446344/217021348-e1ba535a-af18-4c77-b
 - AD&D2E character sheets
 - AD&D2E character creation
 - AD&D2E Party tracker (inventory, weight, treasure splitter...)
+- Record audio of local app (allow transcript? test with bluetooth micro?)
+- Record video of local app and/or server UI 
 - Chat
 - Video
 - 3D View with miniatures on flat or 3D map (top, ortho)
 - Vector Editor (layers, blends, assets, etc) 
-- Rotate/pan/scale shared view
 - Send shared view via dirty rects
 
 ### HTTP Server

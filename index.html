@@ -129,14 +129,14 @@ https://henryegloff.com/fullscreen-button/
 }
 
 /* Center and scale image on viewport */
-.imgbox {
+.imgbox2 {
     display: grid;
     height: 100%;
     /* Use fogColor and don't leak map dimensions in non-fullscreen */
     background-color: rgb(0, 0, 0);
 }
 
-.imgbox::backdrop {
+.imgbox2::backdrop {
     /* Clear to fog color to prevent leaking the size in fullscreen */
     background-color: rgb(255,255,255);
 }
@@ -144,6 +144,21 @@ https://henryegloff.com/fullscreen-button/
     max-width: 100%;
     max-height: 100vh;
     margin: auto;
+}
+
+.imgbox {
+    display:grid;
+    height: 100%;
+}
+
+.center-fill {
+    max-width:100%;
+    max-height:100%;
+    /* Position is necessary so when downscaling it's also centered */
+    /* Position and margin are necessary so it aligns to the center */
+    top:0; left:0; right:0; bottom:0;
+    margin:auto;
+    z-index: 0;
 }
 
 .center-fit {
@@ -414,7 +429,7 @@ function onLoad() {
             </table>
         </div>
         -->
-        <img src="image.png" id="canvas" class="center-fit" />
+        <img src="image.png" id="canvas" class="center-fill" />
     </div>    
 </body>
 </html>
