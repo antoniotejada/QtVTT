@@ -1,6 +1,3 @@
-### Playerviewport synchronized to the player and remote views
-
-![image](https://github.com/antoniotejada/QtVTT/assets/6446344/23c6fad7-4ae9-4b02-871c-ff77d70cf87e)
 # QtVTT
 
 Qt Virtual Table Top 
