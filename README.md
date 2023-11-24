@@ -46,6 +46,9 @@ Virtual Table Top written in Python and Qt
 
 ![image](https://github.com/antoniotejada/QtVTT/assets/6446344/715eb845-a2b9-4c71-b1fb-4c0d979ba534)
 
+### One familiar setting with encounters, combat tracker, and manually added doors and walls
+
+![image](https://github.com/antoniotejada/QtVTT/assets/6446344/5f5df624-5c5d-4aec-b389-3a98b1075f73)
 
 ## Videos
 
@@ -114,6 +117,9 @@ https://user-images.githubusercontent.com/6446344/217021348-e1ba535a-af18-4c77-b
   scene, filter monsters and add them as tokens to the current scene.
 - AD&D2E Combat tracker for rolling initiative, hit points, attacks, damages for
   the tokens in the current scene.
+- Encounter management: Store multiple encounters in scenes, edit via encounter
+  builder, add encounter to combat tracker, add/drag/copy&paste other tokens to
+  combat tracker
 - Fog of war, show faded visited areas
 - Token tooltips with hit points, AC, THAC0, etc
 - Token center label with initiative order
@@ -185,9 +191,6 @@ https://user-images.githubusercontent.com/6446344/217021348-e1ba535a-af18-4c77-b
 - Measurement tools (cone, circle, line, square)
 - Token states/stats/heading (stunned, game-clock timers, etc)
 - Campaign/scenes management
-- Encounter management: Store multiple encounters in scenes, edit via encounter
-  builder, add encounter to combat tracker, add/drag/copy&paste other tokens to
-  combat tracker
 - Copy paste of any object
 - Cross links/embedded tools in text editor (scenes, random tables, monsters,
   etc)
