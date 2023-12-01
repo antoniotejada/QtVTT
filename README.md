@@ -50,6 +50,10 @@ Virtual Table Top written in Python and Qt
 
 ![image](https://github.com/antoniotejada/QtVTT/assets/6446344/5f5df624-5c5d-4aec-b389-3a98b1075f73)
 
+### Manually recreated Dyson Logos map using textured walls and [Mark Gosbell classic symbols](https://markgosbell.itch.io/classic-dungeon-map-symbols)
+
+![image](https://github.com/antoniotejada/QtVTT/assets/6446344/aa76e1c0-de5e-46aa-a1ab-533e93b34d0d)
+
 ## Videos
 
 
@@ -103,7 +107,10 @@ https://user-images.githubusercontent.com/6446344/217021348-e1ba535a-af18-4c77-b
 - Creating, loading and saving scenes
 - Importing images, tokens, music, handouts, texts
 - Deleting tokens, images, walls, doors, music, handouts, texts
-- Cut, copy, and paste selected tokens
+- Cut, copy, and paste selected tokens, images, walls
+- Multiple item selection via rubberband
+- Move/scale images, tokens
+- Textured and variable-width visible walls
 - Select point on single click, full wall on double click (so it can be deleted,
   moved, etc wholesale)
 - Editing token labels
@@ -126,10 +133,11 @@ https://user-images.githubusercontent.com/6446344/217021348-e1ba535a-af18-4c77-b
 - Shared and private handouts
 - Create and edit walls, add points after a given point, remove a point, split
   wall in two, remove empty walls
+- Edit doors by turning into walls back and forth
 - Text editor for adventure script, with realtime table of contents, search,
   (some) markdown tag and keyboard shortcut formatting support, tables, and
   images.
-- Grid cell size resizing, panning
+- Intuitive grid cell size and origin setting
 - Automatic wall creation via contour detection
 - Open Dyson Logos page as campaign (eg https://dysonlogos.blog/2022/01/08/heart-of-darkling-frog-tower/ )
 - Show player viewport on DM view, synchronize to player's and remote views
@@ -181,7 +189,6 @@ https://user-images.githubusercontent.com/6446344/217021348-e1ba535a-af18-4c77-b
   hide it but without too much fading?)
 - Layers, groups, stack objects up/down
 - Light sources and illumination/flickering/animated lights
-- Edit doors
 - Multiple floors support
 - Image/token browser
 - Shared pointers and ephemeral drawing 
